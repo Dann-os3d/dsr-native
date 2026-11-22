@@ -89,9 +89,10 @@ struct RuntimeConfig {
     // the render thread's copies cost more than with Qualcomm's driver), else the first host-visible memory;
     // cached / uncached force it either way.
     std::string staging_memory = "auto";
-    // recorder_copies = 0: draws copy their uniform and vertex data on the render thread (by default a copy thread
-    // does the copying: vk_backend.cpp, CopyOut).
-    bool recorder_copies = true;
+    // recorder_copies = 1: a copy thread copies the draws' uniform and vertex data (vk_backend.cpp, CopyOut). Off by
+    // default: on the OnePlus 6T (4 fast cores, throttled) the extra busy thread cost the render thread more than
+    // it saved; the render thread copies.
+    bool recorder_copies = false;
     // lighter_post_fx = 1: no ambient occlusion, depth of field, camera motion blur or light shafts (the engine's own
     // switches; read at start-up). The menu turns it on with performance mode on GPUs without BC support.
     bool lighter_post_fx = false;
