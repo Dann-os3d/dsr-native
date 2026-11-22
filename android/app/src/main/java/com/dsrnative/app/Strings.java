@@ -31,6 +31,24 @@ final class Strings {
 
     static void setLanguage(String code) { sLang = indexOf(code); }
 
+    /** Index into CODES for the device's language (before settings.txt can be read). */
+    static int deviceLanguage() {
+        Locale l = Locale.getDefault();
+        String lang = l.getLanguage(), country = l.getCountry(), script = l.getScript();
+        if (lang.equals("zh"))
+            return script.equals("Hant") || country.equals("TW") || country.equals("HK") || country.equals("MO") ? 10 : 9;
+        for (int i = 0; i < CODES.length; i++)
+            if (CODES[i].startsWith(lang)) return i;
+        return 0;
+    }
+
+    /** A text in language `lang` (index into CODES). */
+    static String tl(int lang, String key, Object... args) {
+        String[] row = TABLE.get(key);
+        String s = row == null ? key : (lang < row.length && row[lang] != null ? row[lang] : row[0]);
+        return args.length == 0 ? s : String.format(Locale.ROOT, s, args);
+    }
+
     static String t(String key, Object... args) {
         String[] row = TABLE.get(key);
         String s = row == null ? key : (sLang < row.length && row[sLang] != null ? row[sLang] : row[0]);
@@ -799,6 +817,78 @@ final class Strings {
                 "앰비언트 오클루전, 피사계 심도, 카메라 모션 블러, 빛줄기를 끕니다. 약한 GPU의 작업이 크게 줄고 화면은 약간 평평해집니다. 성능 모드는 BC를 지원하지 않는 GPU에서 이 옵션을 켭니다.",
                 "关闭环境光遮蔽、景深、镜头动态模糊和光束：大幅减轻较弱 GPU 的负担，画面略显平淡。性能模式会在不支持 BC 的 GPU 上开启此项。",
                 "關閉環境光遮蔽、景深、鏡頭動態模糊和光束：大幅減輕較弱 GPU 的負擔，畫面略顯平淡。效能模式會在不支援 BC 的 GPU 上開啟此項。");
+        put("perm_t",
+                "Storage access needed",
+                "Accès au stockage requis",
+                "Speicherzugriff erforderlich",
+                "Accesso alla memoria necessario",
+                "Se necesita acceso al almacenamiento",
+                "Acesso ao armazenamento necessário",
+                "Нужен доступ к хранилищу",
+                "ストレージへのアクセスが必要です",
+                "저장공간 접근 권한 필요",
+                "需要存储访问权限",
+                "需要儲存空間存取權");
+        put("perm_n",
+                "DSR Native keeps the game files, your saves and its settings in Download/DSRNative. Turn on \"All files access\" for DSR Native on the next screen, then come back.",
+                "DSR Native garde les fichiers du jeu, vos sauvegardes et ses réglages dans Download/DSRNative. Activez « Accès à tous les fichiers » pour DSR Native sur l'écran suivant, puis revenez.",
+                "DSR Native speichert die Spieldateien, deine Spielstände und seine Einstellungen in Download/DSRNative. Aktiviere auf dem nächsten Bildschirm „Zugriff auf alle Dateien“ für DSR Native und kehre dann zurück.",
+                "DSR Native tiene i file del gioco, i tuoi salvataggi e le sue impostazioni in Download/DSRNative. Attiva \"Accesso a tutti i file\" per DSR Native nella schermata successiva, poi torna qui.",
+                "DSR Native guarda los archivos del juego, tus partidas y sus ajustes en Download/DSRNative. Activa «Acceso a todos los archivos» para DSR Native en la siguiente pantalla y vuelve.",
+                "O DSR Native guarda os arquivos do jogo, seus saves e as configurações em Download/DSRNative. Ative \"Acesso a todos os arquivos\" para o DSR Native na próxima tela e depois volte.",
+                "DSR Native хранит файлы игры, ваши сохранения и настройки в Download/DSRNative. Включите «Доступ ко всем файлам» для DSR Native на следующем экране и вернитесь.",
+                "DSR Native はゲームファイル、セーブデータ、設定を Download/DSRNative に保存します。次の画面で DSR Native の「すべてのファイルへのアクセス」をオンにしてから戻ってください。",
+                "DSR Native는 게임 파일, 세이브, 설정을 Download/DSRNative에 보관합니다. 다음 화면에서 DSR Native의 '모든 파일 액세스'를 켠 뒤 돌아오세요.",
+                "DSR Native 将游戏文件、存档和设置保存在 Download/DSRNative。请在下一个界面为 DSR Native 开启“所有文件访问权限”，然后返回。",
+                "DSR Native 將遊戲檔案、存檔和設定保存在 Download/DSRNative。請在下一個畫面為 DSR Native 開啟「所有檔案存取權」，然後返回。");
+        put("perm_open",
+                "Open settings",
+                "Ouvrir les réglages",
+                "Einstellungen öffnen",
+                "Apri impostazioni",
+                "Abrir ajustes",
+                "Abrir configurações",
+                "Открыть настройки",
+                "設定を開く",
+                "설정 열기",
+                "打开设置",
+                "開啟設定");
+        put("perm_later",
+                "Not now",
+                "Plus tard",
+                "Nicht jetzt",
+                "Non ora",
+                "Ahora no",
+                "Agora não",
+                "Не сейчас",
+                "後で",
+                "나중에",
+                "以后再说",
+                "稍後");
+        put("fps_unl",
+                "Unlocked (experimental)",
+                "Débloqué (expérimental)",
+                "Entsperrt (experimentell)",
+                "Sbloccato (sperimentale)",
+                "Desbloqueado (experimental)",
+                "Desbloqueado (experimental)",
+                "Без ограничения (эксперимент.)",
+                "無制限 (実験的)",
+                "제한 해제 (실험적)",
+                "不限 (实验性)",
+                "不限 (實驗性)");
+        put("fps_unl_n",
+                "Unlocked (experimental): up to your screen's refresh rate (%d Hz). Above 60 fps the game's physics can misbehave (ladders, jumps, falling, some animations).",
+                "Débloqué (expérimental) : jusqu'à la fréquence de votre écran (%d Hz). Au-delà de 60 IPS, la physique du jeu peut se dérégler (échelles, sauts, chutes, certaines animations).",
+                "Entsperrt (experimentell): bis zur Bildwiederholrate deines Bildschirms (%d Hz). Über 60 fps kann die Physik des Spiels fehlerhaft werden (Leitern, Sprünge, Stürze, manche Animationen).",
+                "Sbloccato (sperimentale): fino alla frequenza del tuo schermo (%d Hz). Oltre 60 FPS la fisica del gioco può comportarsi male (scale, salti, cadute, alcune animazioni).",
+                "Desbloqueado (experimental): hasta la frecuencia de tu pantalla (%d Hz). Por encima de 60 FPS la física del juego puede fallar (escaleras, saltos, caídas, algunas animaciones).",
+                "Desbloqueado (experimental): até a taxa de atualização da tela (%d Hz). Acima de 60 FPS a física do jogo pode falhar (escadas, pulos, quedas, algumas animações).",
+                "Без ограничения (эксперимент.): до частоты обновления экрана (%d Гц). Выше 60 FPS физика игры может работать неправильно (лестницы, прыжки, падения, некоторые анимации).",
+                "無制限 (実験的): 画面のリフレッシュレート (%d Hz) まで。60 fps を超えると、ゲームの物理挙動がおかしくなることがあります (はしご、ジャンプ、落下、一部のアニメーション)。",
+                "제한 해제 (실험적): 화면 주사율(%d Hz)까지. 60fps를 넘으면 게임 물리가 이상해질 수 있습니다(사다리, 점프, 낙하, 일부 애니메이션).",
+                "不限 (实验性)：最高到屏幕刷新率 (%d Hz)。超过 60 FPS 时游戏物理可能出错（梯子、跳跃、坠落、部分动画）。",
+                "不限 (實驗性)：最高到螢幕更新率 (%d Hz)。超過 60 FPS 時遊戲物理可能出錯（梯子、跳躍、墜落、部分動畫）。");
         put("cancel", "Cancel", "Annuler", "Abbrechen", "Annulla", "Cancelar", "Cancelar", "Отмена", "キャンセル", "취소",
                 "取消", "取消");
 

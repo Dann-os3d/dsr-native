@@ -448,7 +448,8 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
             const int v = atoi(value);
             if (!strcmp(key, "fps")) {  // e.g. 45: a steady cap below 60; auto: dynamic (60 / 30 / 20)
                 cfg->dynamic_fps = !strcmp(value, "auto");
-                cfg->target_fps = cfg->dynamic_fps ? 60 : std::clamp(v, 30, 60);
+                cfg->unlocked_fps = !strcmp(value, "unlocked");
+                cfg->target_fps = cfg->dynamic_fps || cfg->unlocked_fps ? 60 : std::clamp(v, 30, 60);
             } else if (!strcmp(key, "min_fps")) cfg->min_fps = std::clamp(v, 15, 30);
             else if (!strcmp(key, "async_pipelines")) cfg->async_pipelines = v != 0;
             else if (!strcmp(key, "auto_capture")) cfg->auto_capture = v != 0;
@@ -598,7 +599,7 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
     }
     LOGI(kTag, "settings (%s): fps %d%s, async pipelines %s, auto capture %s, profile %s, gamma %.2f, exposure %.2f, "
          "present mode %s, face buttons by %s",
-         path.c_str(), cfg->target_fps, cfg->dynamic_fps ? " (auto)" : "", cfg->async_pipelines ? "on" : "off", cfg->auto_capture ? "on" : "off",
+         path.c_str(), cfg->target_fps, cfg->dynamic_fps ? " (auto)" : cfg->unlocked_fps ? " (unlocked)" : "", cfg->async_pipelines ? "on" : "off", cfg->auto_capture ? "on" : "off",
          cfg->profile ? "on" : "off", cfg->gamma, cfg->exposure, cfg->present_mode.c_str(),
          g_face_by_position ? "position" : "label");
     LOGI(kTag, "settings: gpu_driver %s, bc_enabler %d, language %s, render scale %.2f, shadow_compare %d, game_hooks %d, skip_intro %d, render_pass_objects %d, mali_barriers %d, performance_mode %d, texture_mip_skip %d, lighter_post_fx %d, present_mode %s, hole_test %d", cfg->gpu_driver.c_str(),
@@ -619,7 +620,11 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
 constexpr const char* kSharedDir = "/storage/emulated/0/Download/DSRNative";
 
 // GameActivity.storageAccess(): 0 = still waiting for the player's answer, 1 = granted, 2 = refused.
-int StorageAccess(android_app* app) {
+int CallActivityStaticInt(android_app* app, const char* name, int fallback);
+int StorageAccess(android_app* app) { return CallActivityStaticInt(app, "storageAccess", 2); }
+
+// A static `int name()` of the activity class (GameActivity); `fallback` if it cannot be called.
+int CallActivityStaticInt(android_app* app, const char* name, int fallback) {
     JavaVM* vm = app->activity->vm;
     JNIEnv* env = nullptr;
     bool attached_here = false;
@@ -627,13 +632,13 @@ int StorageAccess(android_app* app) {
         if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK || !env) return 2;
         attached_here = true;
     }
-    int r = 2;
+    int r = fallback;
     jclass cls = env->GetObjectClass(app->activity->clazz);
-    jmethodID m = cls ? env->GetStaticMethodID(cls, "storageAccess", "()I") : nullptr;
+    jmethodID m = cls ? env->GetStaticMethodID(cls, name, "()I") : nullptr;
     if (m && !env->ExceptionCheck()) r = env->CallStaticIntMethod(cls, m);
     if (env->ExceptionCheck()) {
         env->ExceptionClear();
-        r = 2;
+        r = fallback;
     }
     if (attached_here) vm->DetachCurrentThread();
     return r;
@@ -973,7 +978,8 @@ jboolean JNICALL MenuApply(JNIEnv* env, jclass, jstring jkey, jstring jvalue) {
     if (key == "fps") {
         if (dsr::FrameRateAdjustable()) {
             c.dynamic_fps = value == "auto";
-            c.target_fps = c.dynamic_fps ? 60 : std::clamp(atoi(value.c_str()), 30, 60);
+            c.unlocked_fps = value == "unlocked";
+            c.target_fps = c.dynamic_fps || c.unlocked_fps ? 60 : std::clamp(atoi(value.c_str()), 30, 60);
             now = true;
         }
     } else if (key == "face_buttons") {
@@ -1229,6 +1235,7 @@ struct StartState {
     bool reported_missing = false;
 };
 StartState g_start;
+bool g_start_retry = false;  // StartGame wants another try on the next poll timeout (folder not writable yet)
 
 void StartGame(android_app* app) {
     if (g_game_started) return;
@@ -1247,6 +1254,22 @@ void StartGame(android_app* app) {
         st.old_dir = app->activity->externalDataPath ? app->activity->externalDataPath : "";
         st.base = kSharedDir;
         if (access == 1) MakeDirs(st.base);
+        // Access granted but the folder not writable yet (shared storage still starting up right after the device
+        // booted): retried for a few seconds before falling back to the private folder (which has no settings or
+        // saves of the player's).
+        static std::chrono::steady_clock::time_point first_try{};
+        if (access == 1 && !CanWriteIn(st.base)) {
+            const auto now = std::chrono::steady_clock::now();
+            if (first_try.time_since_epoch().count() == 0) {
+                first_try = now;
+                LOGW(kTag, "%s not writable yet (%s): retrying", kSharedDir, strerror(errno));
+            }
+            if (now - first_try < std::chrono::seconds(8)) {
+                st.prepared = false;
+                g_start_retry = true;
+                return;
+            }
+        }
         if (access != 1 || !CanWriteIn(st.base)) {
             LOGW(kTag, "no access to %s (%s): using the app's private folder %s instead", kSharedDir,
                  access == 1 ? strerror(errno) : "storage access refused", st.old_dir.c_str());
@@ -1266,6 +1289,7 @@ void StartGame(android_app* app) {
         mkdir(cfg.save_dir.c_str(), 0775);
         mkdir(cfg.cache_dir.c_str(), 0775);
         mkdir(cfg.cheats_dir.c_str(), 0775);
+        cfg.display_hz = CallActivityStaticInt(app, "displayMaxHz", 60);
         LoadSettings(st.base + "/settings.txt", &cfg);
         if (app->window) {
             const int ww = ANativeWindow_getWidth(app->window), wh = ANativeWindow_getHeight(app->window);
@@ -1522,7 +1546,10 @@ void android_main(android_app* app) {
             if (source) source->process(app, source);
             if (app->destroyRequested) break;
         }
-        if (r == ALOOPER_POLL_TIMEOUT && !g_game_started && app->window && GameFolderState(app) == 2) StartGame(app);
+        if (r == ALOOPER_POLL_TIMEOUT && !g_game_started && app->window && (GameFolderState(app) == 2 || g_start_retry)) {
+            g_start_retry = false;
+            StartGame(app);
+        }
     }
     if (g_glue_env) app->activity->vm->DetachCurrentThread();  // attached for the touch controls
     LOGI(kTag, "activity destroyed (android_main returning)");

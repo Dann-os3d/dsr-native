@@ -25,6 +25,10 @@ struct RuntimeConfig {
     // follows the frame time, so the game keeps its speed (dynamic fps, after PR #13).
     bool dynamic_fps = false;
     int min_fps = 20;             // lowest rate fps = auto may use (15..30); also the longest game time step
+    // fps = unlocked (experimental): paced at the screen's highest refresh rate (display_hz, 60..144) instead of at
+    // most 60. The game's time step follows the frame time down to that period; above 60 its physics may misbehave.
+    bool unlocked_fps = false;
+    int display_hz = 60;          // the screen's highest refresh rate at its resolution (from the activity)
     bool async_pipelines = true;  // compile new GPU pipelines off the render thread (no hitch; the draw waits a frame)
     bool auto_capture = false;    // diagnostics: save a few frame captures automatically during play
     bool profile = true;          // diagnostics: sampling CPU profile of the busy threads, logged every 10 s
@@ -131,6 +135,11 @@ void ReportGpuFrameTime(double ms);
 void SetGpuHasBc(bool has);
 int GpuHasBc();
 bool FrameRateAdjustable();  // the frame rate patches are in: config.target_fps may change while the game runs
+// The rate a fixed cap paces at: target_fps (30..60), or with fps = unlocked the screen's refresh rate (60..144).
+inline int FixedFps(const RuntimeConfig& c) {
+    if (c.unlocked_fps) return c.display_hz < 60 ? 60 : (c.display_hz > 144 ? 144 : c.display_hz);
+    return c.target_fps < 30 ? 30 : (c.target_fps > 60 ? 60 : c.target_fps);
+}
 
 // Prints an import binding summary (implemented / unimplemented / data) to the log.
 void LogImportReport(bool list_unimplemented);

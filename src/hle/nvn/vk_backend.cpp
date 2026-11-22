@@ -1251,7 +1251,7 @@ public:
         if (!EnsureDevice()) return;
         ReportDraws();
         // The frame rate cap changed while the game runs (settings menu): tell the display.
-        if (window_ && swapchain_ && window_fps_ && window_fps_ != std::clamp(dsr::GetRuntime().config.target_fps, 30, 60))
+        if (window_ && swapchain_ && window_fps_ && window_fps_ != dsr::FixedFps(dsr::GetRuntime().config))
             SetWindowFrameRate();
         Image* src = tex.valid ? FindImage(tex) : nullptr;
         if (src && !(src->written && !IsDepthFormat(src->nvn_format))) src = nullptr;
@@ -1774,7 +1774,7 @@ private:
     void SetWindowFrameRate() {
         using Fn = int32_t (*)(ANativeWindow*, float, int8_t);
         static Fn fn = reinterpret_cast<Fn>(dlsym(RTLD_DEFAULT, "ANativeWindow_setFrameRate"));
-        const float fps = float(std::clamp(dsr::GetRuntime().config.target_fps, 30, 60));
+        const float fps = float(dsr::FixedFps(dsr::GetRuntime().config));
         if (!fn) {
             LOGI(kTag, "ANativeWindow_setFrameRate not available: display rate left to the system");
             return;

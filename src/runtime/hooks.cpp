@@ -296,7 +296,9 @@ void FrameLimiter(uint8_t* self, int /*fps*/) {
     // Up to 1/20 s per step (1/min_fps with fps = auto and min_fps 15): slower devices keep the game at normal speed
     // instead of slow motion.
     const double slowest = rt.config.dynamic_fps ? std::min(MinFps(), 20) : 20;
-    if (g_game_step) *g_game_step = float(std::clamp(seconds, 1.0 / 60.0, 1.0 / slowest));
+    // Down to 1/60 s (fps = unlocked: one period of the screen's refresh rate).
+    const double fastest = rt.config.unlocked_fps && !rt.config.dynamic_fps ? std::max(60, FixedFps(rt.config)) : 60;
+    if (g_game_step) *g_game_step = float(std::clamp(seconds, 1.0 / fastest, 1.0 / slowest));
     *reinterpret_cast<int64_t*>(self + b.last_tick) = hle::os::NowTicks();
     self[b.skip_active] = 0;
     self[b.skip_toggle] = 0;
@@ -434,7 +436,7 @@ int GpuHasBc() { return g_gpu_has_bc.load(); }
 int FrameRateNow() {
     if (MoviePlaying()) return MovieFps();
     const RuntimeConfig& c = GetRuntime().config;
-    return c.dynamic_fps ? g_cap_fps.load(std::memory_order_relaxed) : std::clamp(c.target_fps, 30, 60);
+    return c.dynamic_fps ? g_cap_fps.load(std::memory_order_relaxed) : FixedFps(c);
 }
 
 const char* GameVersion() { return g_build ? g_build->version : nullptr; }
@@ -448,12 +450,14 @@ void InstallGameHooks() {
              g_build->version);
         rt.config.target_fps = 30;
         rt.config.dynamic_fps = false;
+        rt.config.unlocked_fps = false;
         return;
     }
     if (!g_build) {
         LOGW("hooks", "unknown game build %.32s: engine hooks disabled (supported: 1.0.0, 1.0.3)",
              rt.main_nso.build_id_hex.c_str());
         rt.config.dynamic_fps = false;  // no frame limiter of ours: the game paces itself
+        rt.config.unlocked_fps = false;
         return;
     }
     const GameBuild& b = *g_build;
@@ -497,15 +501,20 @@ void InstallGameHooks() {
             if (rt.config.dynamic_fps)
                 LOGI("hooks", "frame rate: own frame limiter, fps auto (60 / 30 / 20 fps, not below %d; changeable in game), "
                      "game time step follows the frame time", MinFps());
+            else if (rt.config.unlocked_fps)
+                LOGI("hooks", "frame rate: own frame limiter, unlocked (experimental): up to %d fps, the screen's refresh "
+                     "rate (changeable in game); game time step follows the frame time, physics may misbehave above 60",
+                     FixedFps(rt.config));
             else
                 LOGI("hooks", "frame rate: own frame limiter at %d fps (changeable in game), game time step follows the frame time",
-                     std::clamp(rt.config.target_fps, 30, 60));
+                     FixedFps(rt.config));
         } else {
             LOGW("hooks", "60 fps patches failed (%s): staying at 30 fps", err.c_str());
             rt.main.PatchInstruction(b.step_adrp + 4, 0xBD400108, b.step_ldr_insn, &err);  // undo what applied
             if (adrp_ok) rt.main.PatchInstruction(b.step_adrp, adrp, b.step_adrp_insn, &err);
             rt.config.target_fps = 30;
             rt.config.dynamic_fps = false;
+            rt.config.unlocked_fps = false;
         }
     }
     // Aspect ratio (offsets below are 1.0.0's; kBuilds has each build's). Two places set the game's resolution, both
