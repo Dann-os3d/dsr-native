@@ -57,6 +57,17 @@ struct GameBuild {
     //   shadow_size:   the shadow map size global (debug menu "ShadwoMap Size", 512..2048, 2048): set to 1024
     //                  before the game starts; the engine sizes the shadow target and its texel offsets from it.
     uint64_t lowvfx_read, shadow_size;
+    // The per-frame dynamic buffer (DLDrawDevice_NXNvn: three, one per frame in flight): its size is
+    // `add w8, w8, #0x200, lsl #12` (2 MiB, plus a config value that is 0). A frame that needs more aborts the game
+    // ("DL_PANIC: dynamic buffer not big enough"), as in a busy boss fight on a wide screen: made 8 MiB.
+    uint64_t dyn_buffer;
+    // Lighter post-processing (settings lighter_post_fx): the engine's own switches, from its debug menu, read by
+    // the per-frame setup of the renderer (`ldrb` from the graphics settings object, x19):
+    //   ao[2]:       "Enable AO" (+0x2ca): the ambient-occlusion switch and the render parameter it sets -> 0
+    //   dof:         "Enable DOF" (+0x2e1): passed (inverted) to the image-process manager -> 0 (no depth of field)
+    //   camblur[2]:  "Disable Camera Blur" (+0x295), on both paths to the camera motion blur -> 1
+    //   lightshaft:  the "LightShaft" draw-group switch (a global, 1) where the pass mask is built -> 0
+    uint64_t ao[2], dof, camblur[2], lightshaft;
 };
 const GameBuild kBuilds[] = {
     {"5a797a3a5da6c4f3468cb7c84e4dde63", "1.0.0", "20180818_462",
@@ -64,13 +75,15 @@ const GameBuild kBuilds[] = {
      0x70bd90, 0x251fb4c, 0, 0x310, 0x31d, 0x31e, 0x320,
      0x6a170c, 0x6a18f8, 0x716170, 0x6a1758, 0x6a1968, 0x716178,
      0x7fea18, 0x7feb30, 0x7892d8, 30,
-     0x3620f4, 0x1aeb890},
+     0x3620f4, 0x1aeb890, 0x70b498,
+     {0x370014, 0x370088}, 0x370584, {0x36ea4c, 0x36ea5c}, 0x3623e0},
     {"6569410c91c398e78ec76b418ee4cca8", "1.0.3", "20181026_101",
      0x667930, 0xB0008068, 0xBD455908,
      0x706d28, 0, 0x2f7, 0x2e8, 0x2f5, 0x2f6, 0x2f8,
      0x69c638, 0x69c824, 0x711ff0, 0x69c684, 0x69c894, 0x711ff8,
      0x7f71d4, 0x7f72ec, 0x782dac, 60,
-     0x356790, 0x1adf890},
+     0x356790, 0x1adf890, 0x7065f4,
+     {0x364494, 0x364508}, 0x364a04, {0x362f3c, 0x362f4c}, 0x356a7c},
     // 1.0.3 of title 01004AB00A260000 (update v196608, buildinfo region DV): the same game and data as the other
     // 1.0.3 with its code moved; matched from it, and the limiter's fields are the same.
     {"df3766a2bb651a3e822828abf10b6f7b", "1.0.3", "20181026_101",
@@ -78,7 +91,8 @@ const GameBuild kBuilds[] = {
      0x707090, 0, 0x2f7, 0x2e8, 0x2f5, 0x2f6, 0x2f8,
      0x69c608, 0x69c7f4, 0x711ec8, 0x69c654, 0x69c864, 0x711ed0,
      0x7f9ec8, 0x7f9fe0, 0x784660, 60,
-     0x356790, 0x1ae3890},
+     0x356790, 0x1ae3890, 0x7067ac,
+     {0x364494, 0x364508}, 0x364a04, {0x362f3c, 0x362f4c}, 0x356a7c},
 };
 const GameBuild* g_build = nullptr;
 
@@ -122,6 +136,38 @@ void ApplyPerformanceMode(Runtime& rt, const GameBuild& b) {
              rt.main.Contains(reinterpret_cast<uintptr_t>(shadow)) ? *shadow : -1);
     }
     LOGI("hooks", "performance mode: %s", done.empty() ? "nothing applied" : done.c_str());
+}
+
+// Lighter post-processing: no ambient occlusion, depth of field, camera motion blur or light shafts (see GameBuild).
+// All or nothing: every instruction is checked first.
+void ApplyLighterPostFx(Runtime& rt, const GameBuild& b) {
+    struct P {
+        uint64_t off;
+        uint32_t from, to;
+    };
+    const P patches[] = {
+        {b.ao[0], 0x394B2A60, 0x52800000},       // ldrb w0, [x19, #0x2ca]  -> mov w0, #0
+        {b.ao[1], 0x394B2A77, 0x52800017},       // ldrb w23, [x19, #0x2ca] -> mov w23, #0
+        {b.dof, 0x394B8668, 0x52800008},         // ldrb w8, [x19, #0x2e1]  -> mov w8, #0
+        {b.camblur[0], 0x394A5668, 0x52800028},  // ldrb w8, [x19, #0x295]  -> mov w8, #1
+        {b.camblur[1], 0x394A5668, 0x52800028},
+        {b.lightshaft, 0x39400108, 0x52800008},  // ldrb w8, [x8]           -> mov w8, #0
+    };
+    for (const P& p : patches) {
+        const uint32_t* at = reinterpret_cast<const uint32_t*>(rt.main.base() + p.off);
+        if (!rt.main.Contains(reinterpret_cast<uintptr_t>(at)) || *at != p.from) {
+            LOGW("hooks", "lighter post-processing not applied: main+0x%llx is not as expected",
+                 (unsigned long long)p.off);
+            return;
+        }
+    }
+    std::string err;
+    for (const P& p : patches)
+        if (!rt.main.PatchInstruction(p.off, p.from, p.to, &err)) {
+            LOGW("hooks", "lighter post-processing: %s", err.c_str());
+            return;
+        }
+    LOGI("hooks", "lighter post-processing: no ambient occlusion, depth of field, camera motion blur or light shafts");
 }
 
 void SkipIntroLogos(Runtime& rt, const GameBuild& b) {
@@ -524,6 +570,16 @@ void InstallGameHooks() {
     }
     if (rt.config.skip_intro) SkipIntroLogos(rt, b);
     if (rt.config.performance_mode) ApplyPerformanceMode(rt, b);
+    if (rt.config.lighter_post_fx) ApplyLighterPostFx(rt, b);
+    {
+        constexpr uint32_t kAdd2MiB = 0x11480108;  // add w8, w8, #0x200, lsl #12
+        constexpr uint32_t kAdd8MiB = 0x11600108;  // add w8, w8, #0x800, lsl #12
+        std::string err;
+        if (rt.main.PatchInstruction(b.dyn_buffer, kAdd2MiB, kAdd8MiB, &err))
+            LOGI("hooks", "dynamic buffers: 8 MiB each (were 2 MiB)");
+        else
+            LOGW("hooks", "dynamic buffer size not changed (%s)", err.c_str());
+    }
     const Hook hooks[] = {
         {b.log, reinterpret_cast<void*>(&EngineLog), "engine log"},
         {b.vlog, reinterpret_cast<void*>(&EngineLogV), "engine vlog"},

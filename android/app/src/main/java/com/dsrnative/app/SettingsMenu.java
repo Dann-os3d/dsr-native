@@ -448,6 +448,8 @@ public final class SettingsMenu {
         toggle("performance_mode", Strings.t("perf_t"), Strings.t("perf_n") + " " + Strings.t("changes_next"), "1", "0",
                 "0");
         renderScale();  // performance mode sets 75%; it can be moved freely afterwards
+        toggle("lighter_post_fx", Strings.t("post_t"), Strings.t("post_n") + " " + Strings.t("changes_next"), "1", "0",
+                "0");
 
         section(Strings.t("sec_gpu"));
         note(Strings.t("gpu_n"));
@@ -1310,17 +1312,21 @@ public final class SettingsMenu {
      * texture_mip_skip and turns it on; off: puts the remembered values back.
      */
     private void performanceScale(boolean on) {
-        if (on && gpuLacksBc()) {
-            String mip = mValues.containsKey("texture_mip_skip") ? mValues.get("texture_mip_skip") : "0";
-            writeSetting("texture_mip_skip_before_perf", mip);
-            mValues.put("texture_mip_skip_before_perf", mip);
-            if (writeSetting("texture_mip_skip", "1")) mValues.put("texture_mip_skip", "1");
-        } else if (!on) {
-            String before = mValues.get("texture_mip_skip_before_perf");
-            if (before != null && !before.isEmpty()) {  // performance mode had turned it on: restored
-                if (writeSetting("texture_mip_skip", before)) mValues.put("texture_mip_skip", before);
-                writeSetting("texture_mip_skip_before_perf", "");
-                mValues.put("texture_mip_skip_before_perf", "");
+        // On GPUs without BC support (the weaker ones: Mali), performance mode also turns on texture mip skip and
+        // lighter post-processing; turning it off puts back what they were.
+        for (String key : new String[] {"texture_mip_skip", "lighter_post_fx"}) {
+            if (on && gpuLacksBc()) {
+                String was = mValues.containsKey(key) ? mValues.get(key) : "0";
+                writeSetting(key + "_before_perf", was);
+                mValues.put(key + "_before_perf", was);
+                if (writeSetting(key, "1")) mValues.put(key, "1");
+            } else if (!on) {
+                String before = mValues.get(key + "_before_perf");
+                if (before != null && !before.isEmpty()) {  // performance mode had turned it on: restored
+                    if (writeSetting(key, before)) mValues.put(key, before);
+                    writeSetting(key + "_before_perf", "");
+                    mValues.put(key + "_before_perf", "");
+                }
             }
         }
         String cur = mValues.containsKey("render_scale") ? mValues.get("render_scale") : "1.00";

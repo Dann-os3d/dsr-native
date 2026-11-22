@@ -493,6 +493,8 @@ struct Image {
     VkClearValue clear_value{};
     VkImageAspectFlags clear_aspect = 0;
     int clear_layer = 0, clear_level = 0;
+    uint64_t serial = 0;      // unique per created image (a background conversion finds its image again)
+    uint64_t upload_gen = 0;  // uploads so far (a conversion for an older upload is dropped)
 };
 
 struct Shader {
@@ -795,6 +797,7 @@ public:
         // command buffer had bound): sampler ids then resolve as before pools were tracked. Lists it calls
         // inherit its pool.
         st_.sampler_pool = 0;
+        ApplyBgConversions();
         MaybeArmCapture();
         ApplyDirtyMarks();
         if (!watched_copies_.empty()) CheckWatchedCopies();
@@ -1501,6 +1504,7 @@ private:
         ProbePatchedBc();
         dsr::SetGpuHasBc(features_.textureCompressionBC || bc_forced_);
         mip_skip_ = dsr::GetRuntime().config.texture_mip_skip > 0;
+        load_skip_ = dsr::GetRuntime().config.pass_load_skip;
         if (mip_skip_) LOGI(kTag, "texture_mip_skip: big BC textures are loaded without their most detailed level");
         if (const int rw = dsr::GetRuntime().config.render_width, rh = dsr::GetRuntime().config.render_height;
             (rw != 1280 || rh != 720) && rw > 0 && rh > 0 && dsr::GetRuntime().config.hud_box) {
@@ -2276,6 +2280,7 @@ private:
         const bool storage = (feats & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) && (!lean_images_ || storage_addrs_.count(t.addr));
         const bool mutable_fmt = img.twin != VK_FORMAT_UNDEFINED && (!lean_images_ || mutable_addrs_.count(t.addr));
         if (!AllocImage(img, storage, mutable_fmt, &img.image, &img.memory)) return nullptr;
+        img.serial = ++image_serial_;
         if (images_created_++ < 48)
             LOGI(kTag, "image %dx%d%s NVN format %d (target %d, %d levels, %d layers) -> Vulkan format %d", img.width,
                  img.height, img.depth > 1 ? "x3D" : "", img.nvn_format, img.target, img.levels, img.layers, vf);
@@ -2384,66 +2389,211 @@ private:
     double bc_convert_ms_ = 0;     // conversion time, for the stats line
     uint64_t bc_cache_hits_ = 0, bc_converted_levels_ = 0;
 
-    void RunBcJobs() {
-        if (bc_jobs_.empty()) return;
-        const auto t0 = std::chrono::steady_clock::now();
-        bc_tasks_.clear();
-        for (uint32_t j = 0; j < bc_jobs_.size(); j++) {
-            const BcJob& job = bc_jobs_[j];
+    // Converts rows [k.row0, k.row0 + k.rows) of one slice of job `j` (quick: the preview encode).
+    static void ConvertTask(const BcJob& j, const BcTask& k, bool quick) {
+        thread_local std::vector<uint8_t> rgba;
+        const int bpb = (j.kind == BcKind::BC1 || j.kind == BcKind::BC4U || j.kind == BcKind::BC4S) ? 8 : 16;
+        const uint8_t* blocks = j.blocks + (size_t(k.z) * size_t(j.brows) + size_t(k.row0)) * size_t(j.bx) * bpb;
+        const int y0 = k.row0 * 4, hh = std::min(j.h - y0, k.rows * 4);
+        const size_t slice = j.out_bytes / size_t(std::max(1, j.depth));
+        uint8_t* out = j.out + size_t(k.z) * slice;
+        const int bxn = (j.w + 3) / 4;
+        switch (j.to) {
+            case BcTo::Decoded:
+                BcDecode(j.kind, blocks, j.bx, k.rows, out + size_t(y0) * size_t(j.w) * size_t(BcDecodedBytes(j.kind)),
+                         j.w, hh);
+                break;
+            case BcTo::Etc2:
+            case BcTo::Etc2Rgba8:
+                rgba.resize(size_t(j.w) * size_t(hh) * 4);
+                BcDecode(j.kind, blocks, j.bx, k.rows, rgba.data(), j.w, hh);
+                if (j.to == BcTo::Etc2)
+                    EncodeEtc2Rgb(out + size_t(k.row0) * size_t(bxn) * 8, rgba.data(), j.w, hh, 1, j.punch, quick);
+                else
+                    EncodeEtc2Rgba8(out + size_t(k.row0) * size_t(bxn) * 16, rgba.data(), j.w, hh, 1, quick);
+                break;
+        }
+    }
+    static void MakeTasks(const std::vector<BcJob>& jobs, std::vector<BcTask>* tasks) {
+        tasks->clear();
+        for (uint32_t j = 0; j < jobs.size(); j++) {
+            const BcJob& job = jobs[j];
             const int band = std::max(2, 4096 / std::max(1, job.bx));  // ~4096 blocks per task
             for (int z = 0; z < job.depth; z++)
                 for (int r = 0; r < job.brows && r * 4 < job.h; r += band)
-                    bc_tasks_.push_back({j, z, r, std::min(band, job.brows - r)});
+                    tasks->push_back({j, z, r, std::min(band, job.brows - r)});
         }
-        WorkPool::Get().Run(bc_tasks_.size(), [this](size_t i) {
-            thread_local std::vector<uint8_t> rgba;
+    }
+    void CacheEtc(uint64_t key, const uint8_t* data, size_t bytes) {
+        if (!key) return;
+        if (etc_cache_bytes_ + bytes > kEtcCacheLimit) {
+            etc_cache_.clear();
+            etc_cache_bytes_ = 0;
+        }
+        auto& e = etc_cache_[key];
+        etc_cache_bytes_ += bytes - e.size();
+        e.assign(data, data + bytes);
+    }
+
+    // quick: preview encodes (not cached; the full ones follow from the background, see DeferBcJobs).
+    void RunBcJobs(bool quick = false) {
+        if (bc_jobs_.empty()) return;
+        const auto t0 = std::chrono::steady_clock::now();
+        MakeTasks(bc_jobs_, &bc_tasks_);
+        WorkPool::Get().Run(bc_tasks_.size(), [this, quick](size_t i) {
             const BcTask& k = bc_tasks_[i];
-            const BcJob& j = bc_jobs_[k.job];
-            const int bpb = (j.kind == BcKind::BC1 || j.kind == BcKind::BC4U || j.kind == BcKind::BC4S) ? 8 : 16;
-            const uint8_t* blocks = j.blocks + (size_t(k.z) * size_t(j.brows) + size_t(k.row0)) * size_t(j.bx) * bpb;
-            const int y0 = k.row0 * 4, hh = std::min(j.h - y0, k.rows * 4);
-            const size_t slice = j.out_bytes / size_t(std::max(1, j.depth));
-            uint8_t* out = j.out + size_t(k.z) * slice;
-            const int bxn = (j.w + 3) / 4;
-            switch (j.to) {
-                case BcTo::Decoded:
-                    BcDecode(j.kind, blocks, j.bx, k.rows, out + size_t(y0) * size_t(j.w) * size_t(BcDecodedBytes(j.kind)),
-                             j.w, hh);
-                    break;
-                case BcTo::Etc2:
-                case BcTo::Etc2Rgba8:
-                    rgba.resize(size_t(j.w) * size_t(hh) * 4);
-                    BcDecode(j.kind, blocks, j.bx, k.rows, rgba.data(), j.w, hh);
-                    if (j.to == BcTo::Etc2)
-                        EncodeEtc2Rgb(out + size_t(k.row0) * size_t(bxn) * 8, rgba.data(), j.w, hh, 1, j.punch);
-                    else
-                        EncodeEtc2Rgba8(out + size_t(k.row0) * size_t(bxn) * 16, rgba.data(), j.w, hh, 1);
-                    break;
-            }
+            ConvertTask(bc_jobs_[k.job], k, quick);
         });
         for (const BcJob& j : bc_jobs_) {
             bc_converted_levels_++;
-            if (!j.key) continue;
-            if (etc_cache_bytes_ + j.out_bytes > kEtcCacheLimit) {
-                etc_cache_.clear();
-                etc_cache_bytes_ = 0;
-            }
-            auto& e = etc_cache_[j.key];
-            etc_cache_bytes_ += j.out_bytes - e.size();
-            e.assign(j.out, j.out + j.out_bytes);
+            if (!quick) CacheEtc(j.key, j.out, j.out_bytes);
         }
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         bc_convert_ms_ += ms;
         static int logged = 0;
         if (ms > 30 && logged++ < 20)
-            LOGI(kTag, "texture conversion: %zu levels in %zu tasks, %.1f ms (%d workers + render thread)",
-                 bc_jobs_.size(), bc_tasks_.size(), ms, WorkPool::Get().Workers());
+            LOGI(kTag, "texture conversion: %zu levels in %zu tasks, %.1f ms (%d workers + render thread)%s",
+                 bc_jobs_.size(), bc_tasks_.size(), ms, WorkPool::Get().Workers(),
+                 quick ? " (quick preview)" : "");
         bc_jobs_.clear();
+    }
+
+    // ---- Background conversion of big textures --------------------------------------------------------------
+    // A big texture converted to ETC2 on the render thread held the frame for up to half a second (Helio G80:
+    // 250-580 ms for a 2048x1024 level): such textures get a quick, coarser encode at once (several times faster)
+    // and the full one is made on a background thread, in small batches on the worker pool (a texture the render
+    // thread needs meanwhile waits one batch at most). The result replaces the preview at the start of a later
+    // command list, unless the texture was re-created or uploaded again in between.
+    static constexpr size_t kBgTexels = 512 * 512;  // ETC2 work (texels to convert) from which a texture goes there
+    struct BgConversion {
+        uint64_t addr = 0, serial = 0, upload_gen = 0;
+        std::vector<uint8_t> blocks, out;
+        std::vector<BcJob> jobs;                 // blocks / out point into the vectors above
+        std::vector<VkBufferImageCopy> regions;  // bufferOffset: into `out`
+        double ms = 0;
+    };
+    std::mutex bg_mutex_;
+    std::condition_variable bg_cv_;
+    std::deque<std::unique_ptr<BgConversion>> bg_queue_, bg_done_;
+    bool bg_started_ = false;
+    uint64_t bg_levels_ = 0, bg_dropped_ = 0;
+    double bg_ms_ = 0;
+
+    void BgMain() {
+        pthread_setname_np(pthread_self(), "dsr-texconv");
+        dsr::platform::UseAllCores();
+        std::vector<BcTask> tasks;
+        for (;;) {
+            std::unique_ptr<BgConversion> c;
+            {
+                std::unique_lock<std::mutex> lk(bg_mutex_);
+                bg_cv_.wait(lk, [&] { return !bg_queue_.empty(); });
+                c = std::move(bg_queue_.front());
+                bg_queue_.pop_front();
+            }
+            const auto t0 = std::chrono::steady_clock::now();
+            MakeTasks(c->jobs, &tasks);
+            // Batches of one task per thread: the pool runs one batch at a time, so the render thread's own
+            // conversions get their turn between batches.
+            const size_t batch = size_t(WorkPool::Get().Workers()) + 1;
+            for (size_t first = 0; first < tasks.size(); first += batch) {
+                const size_t n = std::min(batch, tasks.size() - first);
+                WorkPool::Get().Run(n, [&](size_t i) {
+                    const BcTask& k = tasks[first + i];
+                    ConvertTask(c->jobs[k.job], k, false);
+                });
+            }
+            c->ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            std::lock_guard<std::mutex> lk(bg_mutex_);
+            bg_done_.push_back(std::move(c));
+        }
+    }
+
+    // Moves bc_jobs_ (outputs in the stream, copied by `regions`) to a background conversion; they still get a
+    // quick encode into the stream (RunBcJobs(true)).
+    void DeferBcJobs(const Image& img, const std::vector<VkBufferImageCopy>& regions) {
+        auto c = std::make_unique<BgConversion>();
+        c->addr = img.addr;
+        c->serial = img.serial;
+        c->upload_gen = img.upload_gen;
+        size_t blocks = 0, out = 0;
+        for (const BcJob& j : bc_jobs_) {
+            const int bpb = (j.kind == BcKind::BC1 || j.kind == BcKind::BC4U || j.kind == BcKind::BC4S) ? 8 : 16;
+            blocks += size_t(j.bx) * size_t(j.brows) * size_t(j.depth) * size_t(bpb);
+            out += (j.out_bytes + 15) & ~size_t(15);
+        }
+        c->blocks.resize(blocks);
+        c->out.resize(out);
+        size_t bo = 0, oo = 0;
+        for (const BcJob& j : bc_jobs_) {
+            const int bpb = (j.kind == BcKind::BC1 || j.kind == BcKind::BC4U || j.kind == BcKind::BC4S) ? 8 : 16;
+            const size_t nb = size_t(j.bx) * size_t(j.brows) * size_t(j.depth) * size_t(bpb);
+            memcpy(c->blocks.data() + bo, j.blocks, nb);
+            BcJob bj = j;
+            bj.blocks = c->blocks.data() + bo;
+            bj.out = c->out.data() + oo;
+            const VkDeviceSize stream_off = VkDeviceSize(j.out - stream_ptr_);
+            for (const VkBufferImageCopy& r : regions)
+                if (r.bufferOffset == stream_off) {
+                    VkBufferImageCopy rr = r;
+                    rr.bufferOffset = oo;
+                    c->regions.push_back(rr);
+                    break;
+                }
+            c->jobs.push_back(bj);
+            bo += nb;
+            oo += (j.out_bytes + 15) & ~size_t(15);
+        }
+        std::lock_guard<std::mutex> lk(bg_mutex_);
+        if (!bg_started_) {
+            bg_started_ = true;
+            std::thread([this] { BgMain(); }).detach();
+        }
+        bg_queue_.push_back(std::move(c));
+        bg_cv_.notify_one();
+    }
+
+    // Uploads finished background conversions over their previews (start of a command list).
+    void ApplyBgConversions() {
+        std::deque<std::unique_ptr<BgConversion>> done;
+        {
+            std::lock_guard<std::mutex> lk(bg_mutex_);
+            if (bg_done_.empty()) return;
+            done.swap(bg_done_);
+        }
+        for (auto& c : done) {
+            auto it = images_.find(c->addr);
+            if (it == images_.end() || it->second.serial != c->serial || it->second.upload_gen != c->upload_gen ||
+                c->out.size() > kStreamSize - kMaxUniformRange) {
+                bg_dropped_++;
+                continue;
+            }
+            Image& img = it->second;
+            Begin();
+            EndRendering();
+            if (StreamRemaining() < c->out.size() + 1024) Flush();
+            const VkDeviceSize off = StreamAlloc(c->out.size(), 16);
+            memcpy(stream_ptr_ + off, c->out.data(), c->out.size());
+            for (VkBufferImageCopy& r : c->regions) r.bufferOffset += off;
+            for (const BcJob& j : c->jobs) CacheEtc(j.key, j.out, j.out_bytes);
+            Transition(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            Rec([regions = std::move(c->regions), buf = stream_, image = img.image](VkCommandBuffer cb) {
+                vkCmdCopyBufferToImage(cb, buf, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, uint32_t(regions.size()),
+                                       regions.data());
+            });
+            bg_levels_ += c->jobs.size();
+            bg_ms_ += c->ms;
+            static int logged = 0;
+            if (logged++ < 20)
+                LOGI(kTag, "background texture conversion: %dx%d, %zu levels in %.0f ms (a quick preview was shown "
+                     "meanwhile)", img.width, img.height, c->jobs.size(), c->ms);
+        }
     }
 
     // Fills a sampled texture from game memory: deswizzle each level/layer into the stream, then copy.
     void Upload(Image& img, const TexRef& t) {
         img.uploaded = true;
+        img.upload_gen++;
         img.cpu_source = true;
         img.sample_hash = SampleHash(t);
         img.checked_in_list = list_counter_;
@@ -2536,7 +2686,18 @@ private:
                 regions.push_back(r);
             }
         }
-        RunBcJobs();  // the converted texels are in the stream before the copy is recorded
+        // The converted texels are in the stream before the copy is recorded. Much ETC2 work: a quick preview now,
+        // the full encode in the background.
+        bool deferred = false;
+        if (img.bc_to != BcTo::Decoded && !bc_jobs_.empty() && !capture_active_) {
+            size_t texels = 0;
+            for (const BcJob& j : bc_jobs_) texels += size_t(j.w) * size_t(j.h) * size_t(j.depth);
+            if (texels >= kBgTexels) {
+                DeferBcJobs(img, regions);
+                deferred = true;
+            }
+        }
+        RunBcJobs(deferred);
         Transition(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         Rec([regions = std::move(regions), buf = stream_, image = img.image](VkCommandBuffer cb) {
             vkCmdCopyBufferToImage(cb, buf, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, uint32_t(regions.size()),
@@ -3663,6 +3824,47 @@ private:
         bool has_depth = false, has_stencil = false;
         VkRect2D area;
     };
+    // ---- Skipping loads of render targets a pass overwrites --------------------------------------------------
+    // Most of the game's post-processing passes (bloom, depth of field, tone mapping, downscales: about 40 of the
+    // ~60 passes of a frame) draw one full-screen quad without blending into a target that holds an older result,
+    // which the pass started by loading: on a tiled GPU (Mali, Adreno) a read of the whole image from memory into
+    // the tiles, for nothing. A pass starts with a draw (Draw -> EnsureRendering), so its first draw is known when it
+    // begins: a target that draw writes everywhere starts with "don't care" instead of a load (only the pass's render
+    // area: the rest of a bigger image is untouched). Settings pass_load_skip 0 turns it off.
+    struct FirstDraw {
+        const DrawParams* p = nullptr;
+        const Shader* fs = nullptr;
+        DeviceModes modes{};
+        bool has_depth = false, shader_depth_test = false;
+    };
+    FirstDraw first_draw_;
+    // Which of `colors` the first draw covers: a full-screen triangle or quad (3 to 6 vertices, one instance, no
+    // index buffer) over the whole target and scissor, every channel, no blending, no fragment dropped by a depth /
+    // stencil / alpha test or discard, and the fragment shader writes that target.
+    void PassCoverage(const std::vector<Image*>& colors, VkExtent2D extent, bool covered[8]) {
+        for (size_t i = 0; i < 8; i++) covered[i] = false;
+        const FirstDraw& f = first_draw_;
+        if (!load_skip_ || !f.p || !f.fs) return;
+        const DrawParams& p = *f.p;
+        if (p.index_type >= 0 || p.count < 3 || p.count > 6 || p.instances != 1) return;
+        if (f.fs->info.uses_discard || f.fs->info.writes_depth || f.shader_depth_test || st_.color.alpha_func != 8) return;
+        if (f.has_depth && (st_.depth.depth_test || st_.depth.stencil_test)) return;
+        DynState dyn;
+        DynamicState(extent, f.modes, &dyn);
+        const float vx0 = std::min(dyn.vp.x, dyn.vp.x + dyn.vp.width), vx1 = std::max(dyn.vp.x, dyn.vp.x + dyn.vp.width);
+        const float vy0 = std::min(dyn.vp.y, dyn.vp.y + dyn.vp.height), vy1 = std::max(dyn.vp.y, dyn.vp.y + dyn.vp.height);
+        if (vx0 > 0.5f || vy0 > 0.5f || vx1 < float(extent.width) - 0.5f || vy1 < float(extent.height) - 0.5f) return;
+        if (dyn.sc.offset.x > 0 || dyn.sc.offset.y > 0 ||
+            int64_t(dyn.sc.offset.x) + int64_t(dyn.sc.extent.width) < int64_t(extent.width) ||
+            int64_t(dyn.sc.offset.y) + int64_t(dyn.sc.extent.height) < int64_t(extent.height))
+            return;
+        for (size_t i = 0; i < colors.size() && i < 8; i++)
+            covered[i] = colors[i] && !(st_.color.blend_enable >> i & 1) && ((st_.channel.mask >> (4 * i)) & 0xF) == 0xF &&
+                         (f.fs->info.output_mask >> i & 1);
+    }
+    bool load_skip_ = true;
+    uint64_t loads_skipped_ = 0;
+
     bool EnsureRendering(const std::vector<Image*>& colors, Image* depth, VkExtent2D* extent) {
         std::vector<uint64_t>& key = scratch_rendering_key_;
         key.clear();
@@ -3721,6 +3923,8 @@ private:
                 });
             }
         }
+        bool covered[8];
+        PassCoverage(colors, {w, h}, covered);
         BeginPass bp;
         bp.area = {{0, 0}, {w, h}};
         for (size_t ci = 0; ci < colors.size() && ci < 8; ci++) {
@@ -3741,6 +3945,11 @@ private:
                 bp.color_formats[bp.count] = vf != VK_FORMAT_UNDEFINED ? vf : c->vk_format;
                 a.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                 a.loadOp = c->written ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+                // See PassCoverage: a target the pass's first draw covers is not loaded.
+                if (covered[ci] && c->written && !clear_on_load) {
+                    a.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                    loads_skipped_++;
+                }
                 if (clear_on_load) {
                     a.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
                     a.clearValue = c->clear_value;
@@ -4680,7 +4889,10 @@ private:
 
         Phase(5);
         // ---- queue the draw: the recorder thread builds its descriptor sets and records it --------------------
-        if (!EnsureRendering(colors, depth, &extent)) return Skip("no render target");
+        first_draw_ = {&p, fs, modes, depth != nullptr, shader_depth_test};
+        const bool rendering_ok = EnsureRendering(colors, depth, &extent);
+        first_draw_ = {};
+        if (!rendering_ok) return Skip("no render target");
         if (depth && fs->info.writes_depth && st_.depth.depth_write) depth->depth_exported = depth->fragdepth_written = true;
         DrawPacket d;
         d.pipeline = pipeline;
@@ -5952,6 +6164,17 @@ private:
              (unsigned long long)clears_deferred_, (unsigned long long)clears_in_pass_, (unsigned long long)clears_flushed_,
              (unsigned long long)pass_barriers_, (unsigned long long)lrz_touches_, (unsigned long long)shader_depth_draws_);
         clears_deferred_ = clears_in_pass_ = clears_flushed_ = pass_barriers_ = lrz_touches_ = shader_depth_draws_ = 0;
+        if (load_skip_ && loads_skipped_) {
+            LOGI(kTag, "render target loads skipped (passes whose first draw overwrites them): %llu",
+                 (unsigned long long)loads_skipped_);
+            loads_skipped_ = 0;
+        }
+        if (bg_levels_ || bg_dropped_) {
+            LOGI(kTag, "background texture conversion: %llu levels in %.0f ms, %llu dropped (texture replaced)",
+                 (unsigned long long)bg_levels_, bg_ms_, (unsigned long long)bg_dropped_);
+            bg_levels_ = bg_dropped_ = 0;
+            bg_ms_ = 0;
+        }
         if (rt_writebacks_ || reports_done_) {
             LOGI(kTag, "small render targets written back to game memory: %llu; reports written: %llu",
                  (unsigned long long)rt_writebacks_, (unsigned long long)reports_done_);
@@ -6442,6 +6665,7 @@ private:
     // diagnostics
     uint64_t last_video_present_ = 0, video_cadence_[5] = {};
     uint64_t presented_ = 0, drawn_ = 0, list_counter_ = 0, reuploads_ = 0;
+    uint64_t image_serial_ = 0;
     int swapchains_created_ = 0, images_created_ = 0, clear_colors_logged_ = 0, copies_logged_ = 0,
         target_sets_logged_ = 0, shaders_translated_ = 0, shader_failures_logged_ = 0, uploads_ = 0, flushes_ = 0,
         b2t_logged_ = 0, constants_logged_ = 0, handles_logged_ = 0;

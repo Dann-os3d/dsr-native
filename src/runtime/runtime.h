@@ -77,6 +77,12 @@ struct RuntimeConfig {
     // texture_mip_skip = 1: big BC textures (512x512 and up, with mip levels) are loaded without their most detailed
     // level: half the width and height, ~75% less data to convert, upload and sample; softer up close.
     int texture_mip_skip = 0;
+    // pass_load_skip = 0: render passes always load their targets (by default a pass learned to overwrite a target
+    // starts without loading it: vk_backend.cpp, PassCoverage).
+    bool pass_load_skip = true;
+    // lighter_post_fx = 1: no ambient occlusion, depth of field, camera motion blur or light shafts (the engine's own
+    // switches; read at start-up). The menu turns it on with performance mode on GPUs without BC support.
+    bool lighter_post_fx = false;
     // skip_intro = 1: the company logos at the start are skipped (straight to the title movie).
     bool skip_intro = false;
     int max_anisotropy = 0;  // limit on the game's anisotropic texture filtering (0 = the game's own level)

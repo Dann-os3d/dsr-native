@@ -775,6 +775,30 @@ final class Strings {
                 "파일을 고를 앱이 없습니다. 대신 .txt 파일을 %s에 복사한 뒤(이름은 빌드 ID) 이 탭을 다시 여세요.",
                 "没有可选择文件的应用。请将 .txt 文件复制到 %s（以版本 ID 命名），然后重新打开此标签页。",
                 "沒有可選擇檔案的應用程式。請將 .txt 檔案複製到 %s（以版本 ID 命名），然後重新開啟此分頁。");
+        put("post_t",
+                "Lighter post-processing",
+                "Post-traitement allégé",
+                "Leichtere Nachbearbeitung",
+                "Post-elaborazione leggera",
+                "Posprocesado ligero",
+                "Pós-processamento leve",
+                "Облегчённая постобработка",
+                "軽量ポストプロセス",
+                "가벼운 후처리",
+                "轻量后期处理",
+                "輕量後期處理");
+        put("post_n",
+                "Turns off ambient occlusion, depth of field, camera motion blur and light shafts: much less work for weaker GPUs, a slightly flatter picture. Performance mode turns it on for GPUs without BC support.",
+                "Désactive l'occlusion ambiante, la profondeur de champ, le flou de mouvement de la caméra et les rayons de lumière : bien moins de travail pour les GPU modestes, une image un peu plus plate. Le mode performance l'active pour les GPU sans prise en charge BC.",
+                "Schaltet Umgebungsverdeckung, Tiefenschärfe, Kamera-Bewegungsunschärfe und Lichtstrahlen ab: viel weniger Arbeit für schwächere GPUs, ein etwas flacheres Bild. Der Leistungsmodus schaltet es bei GPUs ohne BC-Unterstützung ein.",
+                "Disattiva occlusione ambientale, profondità di campo, sfocatura di movimento della telecamera e raggi di luce: molto meno lavoro per le GPU più deboli, un'immagine un po' più piatta. La modalità prestazioni lo attiva sulle GPU senza supporto BC.",
+                "Desactiva la oclusión ambiental, la profundidad de campo, el desenfoque de movimiento de cámara y los rayos de luz: mucho menos trabajo para GPU modestas, una imagen algo más plana. El modo rendimiento lo activa en GPU sin soporte BC.",
+                "Desliga a oclusão de ambiente, a profundidade de campo, o desfoque de movimento da câmera e os raios de luz: bem menos trabalho para GPUs mais fracas, uma imagem um pouco mais plana. O modo desempenho liga isso em GPUs sem suporte a BC.",
+                "Отключает фоновое затенение, глубину резкости, размытие при движении камеры и лучи света: намного меньше работы для слабых GPU, картинка чуть более плоская. Режим производительности включает это на GPU без поддержки BC.",
+                "アンビエントオクルージョン、被写界深度、カメラのモーションブラー、光芒をオフにします。性能の低い GPU の負荷が大きく下がり、画面はやや平坦になります。パフォーマンスモードは BC 非対応の GPU でこれをオンにします。",
+                "앰비언트 오클루전, 피사계 심도, 카메라 모션 블러, 빛줄기를 끕니다. 약한 GPU의 작업이 크게 줄고 화면은 약간 평평해집니다. 성능 모드는 BC를 지원하지 않는 GPU에서 이 옵션을 켭니다.",
+                "关闭环境光遮蔽、景深、镜头动态模糊和光束：大幅减轻较弱 GPU 的负担，画面略显平淡。性能模式会在不支持 BC 的 GPU 上开启此项。",
+                "關閉環境光遮蔽、景深、鏡頭動態模糊和光束：大幅減輕較弱 GPU 的負擔，畫面略顯平淡。效能模式會在不支援 BC 的 GPU 上開啟此項。");
         put("cancel", "Cancel", "Annuler", "Abbrechen", "Annulla", "Cancelar", "Cancelar", "Отмена", "キャンセル", "취소",
                 "取消", "取消");
 
