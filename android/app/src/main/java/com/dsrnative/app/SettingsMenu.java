@@ -464,6 +464,14 @@ public final class SettingsMenu {
 
     // ---- Driver tab ---------------------------------------------------------------------------------------------
 
+    // Drivers that come with the app (assets/drivers/<name>.zip; the native side copies them out of the APK).
+    private static final String[] BUNDLED_DRIVERS = {"Turnip_Gen8_V39"};
+
+    private static boolean isBundledDriver(String d) {
+        for (String b : BUNDLED_DRIVERS) if (b.equals(d)) return true;
+        return false;
+    }
+
     private static String driverLabel(String d) {
         return d == null || d.isEmpty() || d.equals("system") ? Strings.t("system_driver") : d;
     }
@@ -477,6 +485,7 @@ public final class SettingsMenu {
         if (chosen == null || chosen.isEmpty()) chosen = "system";
         List<String> drivers = new ArrayList<>();
         drivers.add("system");
+        for (String b : BUNDLED_DRIVERS) drivers.add(b);
         File dir = new File(sDriversDir);
         File[] files = dir.listFiles();
         if (files != null) {
@@ -492,7 +501,8 @@ public final class SettingsMenu {
         for (final String d : drivers) {
             String label = d.equals("system") ? Strings.t("system_driver") + " " + Strings.t("default_mark") : d;
             if (d.equals(sRunningDriver)) label += "   • " + Strings.t("mark_in_use");
-            if (!d.equals("system") && !new File(dir, d).isFile()) label += "   • " + Strings.t("mark_missing");
+            if (!d.equals("system") && !isBundledDriver(d) && !new File(dir, d).isFile())
+                label += "   • " + Strings.t("mark_missing");
             final TextView row = chip(label, false);
             row.setSelected(d.equals(chosen));
             row.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);

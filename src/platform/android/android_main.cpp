@@ -8,6 +8,7 @@
 //   settings.txt
 //   drivers/       custom Vulkan drivers (.zip as for AdrenoTools, or a bare .so), chosen with gpu_driver
 //   logs/          dsr_<date>_<time>.txt run logs, frame captures, shader dumps (also logcat: adb logcat -s 'DSR/*')
+#include <android/asset_manager.h>
 #include <android/input.h>
 #include <android/log.h>
 #include <android_native_app_glue.h>
@@ -340,7 +341,8 @@ std::string g_custom_game_dir;  // settings.txt `game_dir`: a game folder the pl
 #define GPU_DRIVER_HELP                                                                                      \
     "# gpu_driver: system = the phone's own Vulkan driver; or the name of a file in the drivers folder next\n" \
     "# to this file: a driver .zip as made for AdrenoTools (e.g. Mesa Turnip) or a bare .so\n"                 \
-    "# (e.g. gpu_driver = turnip.zip). If it cannot be loaded, the system driver is used.\n"
+    "# (e.g. gpu_driver = turnip.zip), or a driver that comes with the app: Turnip_Gen8_V39 (Adreno).\n" \
+    "# If it cannot be loaded, the system driver is used.\n"
 #define BC_ENABLER_HELP                                                                                      \
     "# bc_enabler: 1 = on Adreno 6xx system drivers, patch in the compressed (BC) texture formats the GPU\n"   \
     "# supports but the driver hides (faster, and some textures look right); 0 = decode them on the CPU\n"
@@ -811,6 +813,9 @@ std::vector<std::string> Unzip(const std::string& zip, const std::string& dir, c
     return out;
 }
 
+// GPU drivers that come with the app (android/app/src/main/assets/drivers/<name>.zip; licence notes beside them).
+const char* const kBundledDrivers[] = {"Turnip_Gen8_V39"};
+
 // settings.txt `gpu_driver`: the file in <base>/drivers is copied (a .so) or unpacked (a .zip) into the app's
 // private folder, since libraries cannot be loaded from shared storage. Sets cfg->gpu_driver_dir/_lib.
 void PrepareGpuDriver(android_app* app, const std::string& base, dsr::RuntimeConfig* cfg) {
@@ -818,14 +823,49 @@ void PrepareGpuDriver(android_app* app, const std::string& base, dsr::RuntimeCon
     mkdir(drivers.c_str(), 0775);
     cfg->native_lib_dir = NativeLibraryDir(app);
     if (cfg->gpu_driver.empty() || cfg->gpu_driver == "system") return;
-    const std::string src = drivers + "/" + cfg->gpu_driver;
-    if (!FileExists(src)) {
-        LOGW(kTag, "gpu_driver: %s not found: using the system driver", src.c_str());
-        return;
-    }
     const char* priv = app->activity->internalDataPath;
     if (!priv || cfg->native_lib_dir.empty()) {
         LOGW(kTag, "gpu_driver: no private folder or native library folder: using the system driver");
+        return;
+    }
+    std::string src = drivers + "/" + cfg->gpu_driver;
+    // Drivers that come with the app (APK assets/drivers/<name>.zip, chosen by name without ".zip"): copied out of
+    // the APK into the private folder first (kept there while it is the same size).
+    for (const char* bundled : kBundledDrivers) {
+        if (cfg->gpu_driver != bundled) continue;
+        const std::string asset = std::string("drivers/") + bundled + ".zip";
+        src = std::string(priv) + "/bundled_" + bundled + ".zip";
+        AAsset* a = app->activity->assetManager
+                        ? AAssetManager_open(app->activity->assetManager, asset.c_str(), AASSET_MODE_STREAMING)
+                        : nullptr;
+        if (!a) {
+            LOGW(kTag, "gpu_driver: built-in %s missing from the app: using the system driver", bundled);
+            return;
+        }
+        const off64_t size = AAsset_getLength64(a);
+        struct stat st {};
+        if (stat(src.c_str(), &st) != 0 || off64_t(st.st_size) != size) {
+            bool ok = false;
+            if (FILE* w = fopen((src + ".tmp").c_str(), "wb")) {
+                char buf[65536];
+                int n;
+                off64_t total = 0;
+                while ((n = AAsset_read(a, buf, sizeof(buf))) > 0 && fwrite(buf, 1, size_t(n), w) == size_t(n)) total += n;
+                ok = fclose(w) == 0 && total == size;
+            }
+            ok = ok && rename((src + ".tmp").c_str(), src.c_str()) == 0;
+            if (!ok) {
+                AAsset_close(a);
+                unlink((src + ".tmp").c_str());
+                LOGW(kTag, "gpu_driver: could not copy the built-in %s out of the app: using the system driver", bundled);
+                return;
+            }
+        }
+        AAsset_close(a);
+        LOGI(kTag, "gpu_driver: built-in %s (%lld bytes)", bundled, (long long)size);
+    }
+    if (!FileExists(src)) {
+        LOGW(kTag, "gpu_driver: %s not found: using the system driver", src.c_str());
         return;
     }
     const std::string dir = std::string(priv) + "/gpu_driver/";
