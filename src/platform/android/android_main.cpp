@@ -527,6 +527,8 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
             else if (!strcmp(key, "performance_mode")) cfg->performance_mode = v != 0;
             else if (!strcmp(key, "texture_mip_skip")) cfg->texture_mip_skip = std::clamp(v, 0, 1);
             else if (!strcmp(key, "pass_load_skip")) cfg->pass_load_skip = v != 0;
+            else if (!strcmp(key, "staging_memory")) cfg->staging_memory = value;
+            else if (!strcmp(key, "recorder_copies")) cfg->recorder_copies = v != 0;
             else if (!strcmp(key, "lighter_post_fx")) cfg->lighter_post_fx = v != 0;
             else if (!strcmp(key, "gamma")) {
                 const float g = float(atof(value));

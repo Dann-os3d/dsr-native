@@ -253,7 +253,7 @@ std::vector<VkFormat> ImageCandidates(int f) {
 template <typename V>
 class FlatMap {
 public:
-    FlatMap() { Rehash(1024); }
+    explicit FlatMap(size_t capacity = 1024) { Rehash(capacity); }  // a power of two
     V* Find(uint64_t key) {
         for (size_t i = Index(key);; i = (i + 1) & mask_) {
             Slot& s = slots_[i];
@@ -541,7 +541,7 @@ struct Image {
     uint64_t next_check_list = 0;
     uint32_t check_interval = 1;
     std::map<std::vector<uint32_t>, VkImageView> views;
-    std::unordered_map<uint64_t, VkImageView> fast_views;  // same views by hashed key
+    FlatMap<VkImageView> fast_views{16};  // same views by hashed key
     uint64_t addr = 0;     // storage in game memory
     TextureState tex{};    // as the game described it (layout of that storage)
     VkFormat twin = VK_FORMAT_UNDEFINED;  // sRGB/linear counterpart views may use (image is mutable-format)
@@ -696,6 +696,7 @@ public:
                 }
                 case CmdType::CopyBufferToBuffer:
                     if (c.size64 && GuestRangeValid(c.src_addr, c.size64) && GuestRangeValid(c.dst_addr, c.size64)) {
+                        FinishCopies();  // earlier draws' data copied before it changes
                         memmove(reinterpret_cast<void*>(c.dst_addr), reinterpret_cast<const void*>(c.src_addr), c.size64);
                         MemoryWrittenInList(c.dst_addr, c.size64);
                         list_b2b_copies_++;
@@ -705,6 +706,7 @@ public:
                 case CmdType::UpdateUniform: {
                     const std::span<const uint8_t> data = Items<uint8_t>(c);
                     if (!data.empty() && GuestRangeValid(c.dst_addr, data.size())) {
+                        FinishCopies();
                         memcpy(reinterpret_cast<void*>(c.dst_addr), data.data(), data.size());
                         MemoryWrittenInList(c.dst_addr, data.size());  // cached copies may include the old bytes
                         list_updates_++;
@@ -894,6 +896,7 @@ public:
             ResetPersistentSets();
             persist_full_ = false;
         }
+        FinishCopies();  // the game may reuse the memory once the list is done
         if (capture_active_) FinishCapture();
         CheckSlowList(marks);
         last_list_draws_ = drawn_ - list_start_draws_;
@@ -1580,6 +1583,7 @@ private:
         dsr::SetGpuHasBc(features_.textureCompressionBC || bc_forced_);
         mip_skip_ = dsr::GetRuntime().config.texture_mip_skip > 0;
         load_skip_ = dsr::GetRuntime().config.pass_load_skip;
+        ChooseStagingMemory();
         if (mip_skip_) LOGI(kTag, "texture_mip_skip: big BC textures are loaded without their most detailed level");
         if (const int rw = dsr::GetRuntime().config.render_width, rh = dsr::GetRuntime().config.render_height;
             (rw != 1280 || rh != 720) && rw > 0 && rh > 0 && dsr::GetRuntime().config.hud_box) {
@@ -1646,6 +1650,35 @@ private:
         return true;
     }
 
+    // Memory for the per-frame staging buffers (the slots' streams, the geometry cache): see settings staging_memory.
+    VkMemoryPropertyFlags staging_flags_ = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    void ChooseStagingMemory() {
+        std::string types;
+        bool cached_coherent = false;
+        for (uint32_t i = 0; i < mem_props_.memoryTypeCount; i++) {
+            const VkMemoryPropertyFlags f = mem_props_.memoryTypes[i].propertyFlags;
+            char t[64];
+            snprintf(t, sizeof(t), " %u:%s%s%s%s", i, f & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT ? "D" : "",
+                     f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT ? "V" : "", f & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT ? "C" : "",
+                     f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT ? "$" : "");
+            types += t;
+            const VkMemoryPropertyFlags want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                               VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+            if ((f & want) == want) cached_coherent = true;
+        }
+        const std::string& mode = dsr::GetRuntime().config.staging_memory;
+        const bool adreno = props_.vendorID == 0x5143;
+        const bool cached = cached_coherent && (mode == "cached" || (mode != "uncached" && adreno));
+        if (cached) staging_flags_ |= VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+        LOGI(kTag, "memory types (D device-local, V host-visible, C coherent, $ cached):%s | staging memory: %s "
+             "(staging_memory %s)", types.c_str(), cached ? "cached" : "first host-visible", mode.c_str());
+    }
+    // A host-visible, coherent type for staging buffers: cached as chosen above where the buffer allows it.
+    uint32_t StagingMemory(uint32_t bits) {
+        for (uint32_t i = 0; i < mem_props_.memoryTypeCount; i++)
+            if ((bits & (1u << i)) && (mem_props_.memoryTypes[i].propertyFlags & staging_flags_) == staging_flags_) return i;
+        return FindMemory(bits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    }
     uint32_t FindMemory(uint32_t bits, VkMemoryPropertyFlags want) {
         for (uint32_t i = 0; i < mem_props_.memoryTypeCount; i++)
             if ((bits & (1u << i)) && (mem_props_.memoryTypes[i].propertyFlags & want) == want) return i;
@@ -1666,8 +1699,7 @@ private:
         vkGetBufferMemoryRequirements(device_, stream_, &req);
         VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
         ai.allocationSize = req.size;
-        ai.memoryTypeIndex =
-            FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        ai.memoryTypeIndex = StagingMemory(req.memoryTypeBits);
         if (vkAllocateMemory(device_, &ai, nullptr, &stream_memory_) != VK_SUCCESS) return false;
         vkBindBufferMemory(device_, stream_, stream_memory_, 0);
         void* p = nullptr;
@@ -1811,7 +1843,7 @@ private:
             sl.extra_used = 0;
             for (VkFramebuffer fb : sl.framebuffers) vkDestroyFramebuffer(device_, fb, nullptr);
             sl.framebuffers.clear();
-            desc_cache_.clear();
+            desc_cache_.Clear();
         });
     }
     void Begin() {
@@ -2265,7 +2297,7 @@ private:
         for (auto& [k, v] : img.views) r.views.push_back(v);
         retired_.push_back(std::move(r));
         img.views.clear();
-        img.fast_views.clear();
+        img.fast_views.Clear();
         img.image = ni;
         img.memory = nm;
         img.layout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -2288,8 +2320,8 @@ private:
             });
         }
         Rec([this](VkCommandBuffer) {
-            persist_cache_.clear();
-            desc_cache_.clear();
+            persist_cache_.Clear();
+            desc_cache_.Clear();
         });
         if (keep || old_layout != VK_IMAGE_LAYOUT_UNDEFINED) {
             const VkImageLayout to = old_layout != VK_IMAGE_LAYOUT_UNDEFINED ? old_layout : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -2366,8 +2398,8 @@ private:
         if (!persist_pool_) return;
         Drain();
         vkResetDescriptorPool(device_, persist_pool_, 0);
-        persist_cache_.clear();
-        desc_cache_.clear();  // may hold sets from the persistent pool
+        persist_cache_.Clear();
+        desc_cache_.Clear();  // may hold sets from the persistent pool
         InvalidateBoundState();
         persist_resets_++;
     }
@@ -2394,8 +2426,8 @@ private:
         images_retired_++;
         // Cached descriptor sets may name its views: forgotten (their pool is emptied when full, GPU idle).
         Rec([this](VkCommandBuffer) {
-            persist_cache_.clear();
-            desc_cache_.clear();
+            persist_cache_.Clear();
+            desc_cache_.Clear();
         });
         img = Image{};
     }
@@ -2824,8 +2856,7 @@ private:
         const uint32_t parts[11] = {uint32_t(type), base_layer, layers, levels, aspect, swz[0], swz[1], swz[2], swz[3],
                                     base_level, uint32_t(format)};
         k.Add(parts, sizeof(parts));
-        auto fast = img.fast_views.find(k.h);
-        if (fast != img.fast_views.end()) return fast->second;
+        if (const VkImageView* fast = img.fast_views.Find(k.h)) return *fast;
         std::vector<uint32_t> key(parts, parts + 11);
         auto it = img.views.find(key);
         if (it != img.views.end()) return it->second;
@@ -2843,7 +2874,7 @@ private:
             v = VK_NULL_HANDLE;
         }
         img.views[key] = v;
-        img.fast_views[k.h] = v;
+        img.fast_views.Insert(k.h, v);
         return v;
     }
     // The level/layer a render target view selects (clamped to the image).
@@ -2904,8 +2935,7 @@ private:
         fk.Add(&s, sizeof(SamplerObj));
         fk.Add(shadow);
         fk.Add(filterable);
-        auto fast = samplers_fast_.find(fk.h);
-        if (fast != samplers_fast_.end()) return fast->second;
+        if (const VkSampler* fast = samplers_fast_.Find(fk.h)) return *fast;
         std::vector<uint32_t> key(sizeof(SamplerObj) / 4 + 2);
         memcpy(key.data(), &s, sizeof(SamplerObj));
         key[key.size() - 2] = shadow;
@@ -2954,7 +2984,7 @@ private:
         VkSampler smp = VK_NULL_HANDLE;
         vkCreateSampler(device_, &ci, nullptr, &smp);
         samplers_[key] = smp;
-        samplers_fast_[fk.h] = smp;
+        samplers_fast_.Insert(fk.h, smp);
         return smp;
     }
 
@@ -3122,6 +3152,7 @@ private:
     // Waits until everything queued is recorded (render thread).
     void Drain() {
         if (!rec_started_) return;
+        EmitPendingCopies();
         Publish();
         auto idle = [&] {
             return rec_queued_.load(std::memory_order_acquire) == 0 && !rec_busy_.load(std::memory_order_acquire);
@@ -3239,6 +3270,7 @@ private:
     // The recorder ends the buffer and submits it once it has recorded everything queued before; the render
     // thread moves on to the next slot without waiting (it waited ~1.5 ms a frame for the recorder's tail).
     void SubmitAndWait(VkSemaphore wait, VkSemaphore signal) {
+        EmitPendingCopies();  // before the submission (they fill this slot's stream)
         Slot& sl = slots_[slot_];
         sl.ts_written = sl.ts != VK_NULL_HANDLE;
         sl.pending = true;
@@ -4137,12 +4169,11 @@ private:
                                        (uint32_t(opt.depth_test_func) << 12)};  // the depth test variant is its own shader
         Key64 fk;
         fk.Add(parts, sizeof(parts));
-        auto fast = shaders_fast_.find(fk.h);
-        if (fast != shaders_fast_.end()) return fast->second;
+        if (Shader* const* fast = shaders_fast_.Find(fk.h)) return *fast;
         std::vector<uint32_t> key(parts, parts + 6);
         auto it = shaders_.find(key);
         if (it != shaders_.end()) {
-            shaders_fast_[fk.h] = &it->second;
+            shaders_fast_.Insert(fk.h, &it->second);
             return &it->second;
         }
         Shader& s = shaders_[key];
@@ -4363,7 +4394,7 @@ private:
     // This game does not bind textures through NVN: it writes texture handles (from
     // nvnDeviceGetTextureHandle) into its own uniform buffer at binding 10, which shaders read as
     // c[13][0x20 + 8 * slot]. Read the handle from there and resolve it like a bind would.
-    std::unordered_map<uint32_t, BoundTexture> handle_memo_;
+    FlatMap<BoundTexture> handle_memo_{256};
     uint64_t handle_memo_list_ = ~0ull;
     BoundTexture HandleFromUniforms(int stage, uint32_t slot) {
         BoundTexture bt;
@@ -4375,15 +4406,14 @@ private:
         // Resolved once per list (two locked lookups in the shared pools otherwise, for every texture of every
         // draw); registrations are made before the list is submitted.
         if (handle_memo_list_ != list_counter_) {
-            handle_memo_.clear();
+            handle_memo_.Clear();
             handle_memo_list_ = list_counter_;
         }
-        auto memo = handle_memo_.find(handle);
-        if (memo != handle_memo_.end()) return memo->second;
+        if (const BoundTexture* memo = handle_memo_.Find(handle)) return *memo;
         bt.texture = TextureById(int(handle & 0xFFFFF));
         bt.sampler = SamplerById(int(handle >> 20), reinterpret_cast<const void*>(st_.sampler_pool));
         bt.valid = bt.texture.valid;
-        handle_memo_.emplace(handle, bt);
+        handle_memo_.Insert(handle, bt);
         if (!bt.valid && handles_logged_++ < 8)
             LOGW(kTag, "texture handle 0x%08x (stage %d slot %u) does not name a registered texture", handle, stage, slot);
         return bt;
@@ -4408,7 +4438,11 @@ private:
     }
     struct PhaseEnd {
         VulkanBackend* self;
-        ~PhaseEnd() { self->Phase(6); }
+        ~PhaseEnd() {
+            self->EmitPendingCopies();  // every way out of Draw (the data may be in the upload cache for later draws)
+            self->defer_copies_ = false;
+            self->Phase(6);
+        }
     };
 
     // Per-draw scratch storage (reused, so a draw allocates nothing). Draw only re-enters itself as
@@ -4434,6 +4468,7 @@ private:
         phase_timing_ = (drawn_ & 7) == 0;
         Phase(-1);
         PhaseEnd phase_end{this};
+        defer_copies_ = Async() && dsr::GetRuntime().config.recorder_copies;
         no_attachment_extent_ = {0, 0};
         if (p.count <= 0 || p.instances <= 0) return;
         if (!begin_rendering_ && !rp_fallback_) return Skip("no dynamic rendering");
@@ -5329,19 +5364,17 @@ private:
             dk.Add(t.info.imageView);
             dk.Add(t.info.imageLayout);
         }
-        auto cached_sets = desc_cache_.find(dk.h);
-        bool reuse = cached_sets != desc_cache_.end();
-        if (!reuse) {
-            auto ps = persist_cache_.find(dk.h);
-            if (ps != persist_cache_.end()) {
-                cached_sets = desc_cache_.emplace(dk.h, ps->second).first;
-                reuse = true;
+        const std::pair<VkDescriptorSet, VkDescriptorSet>* cached_sets = desc_cache_.Find(dk.h);
+        if (!cached_sets) {
+            if (const auto* ps = persist_cache_.Find(dk.h)) {
+                cached_sets = &desc_cache_.Insert(dk.h, *ps);
                 persist_hits_++;
             }
         }
+        const bool reuse = cached_sets != nullptr;
         if (reuse) {
-            sets[0] = cached_sets->second.first;
-            sets[1] = cached_sets->second.second;
+            sets[0] = cached_sets->first;
+            sets[1] = cached_sets->second;
             desc_reused_++;
         } else {
             bool persistent = false;
@@ -5382,8 +5415,8 @@ private:
                 w.pImageInfo = &t.info;
             }
             if (n) vkUpdateDescriptorSets(device_, n, writes, 0, nullptr);
-            desc_cache_[dk.h] = {sets[0], sets[1]};
-            if (persistent) persist_cache_[dk.h] = {sets[0], sets[1]};
+            desc_cache_.Insert(dk.h, {sets[0], sets[1]});
+            if (persistent) persist_cache_.Insert(dk.h, {sets[0], sets[1]});
         }
 
         if (d.pipeline != bound_pipeline_) {
@@ -5663,7 +5696,7 @@ private:
         if (j.result != VK_SUCCESS) LogOnce("pipeline", "vkCreateGraphicsPipelines failed: %d", j.result);
         const VkPipeline p = j.pipeline;
         pipelines_[e.first] = p;
-        if (p) pipelines_fast_[h] = p;
+        if (p) pipelines_fast_.Insert(h, p);
         compiling_.erase(h);
         return p;
     }
@@ -5688,8 +5721,7 @@ private:
         for (size_t i = 0; i < color_formats.size(); i++) fk.Add(&st_.blend[i], sizeof(BlendStateObj));
         fk.Add(layout);
         pipeline_pending_ = false;
-        auto fast = pipelines_fast_.find(fk.h);
-        if (fast != pipelines_fast_.end()) return fast->second;
+        if (const VkPipeline* fast = pipelines_fast_.Find(fk.h)) return *fast;
         auto running = compiling_.find(fk.h);
         if (running != compiling_.end()) {
             VkPipeline p = FinishCompile(fk.h, running->second);
@@ -5718,7 +5750,7 @@ private:
         for (size_t i = 0; i < color_formats.size(); i++) add(&st_.blend[i], sizeof(BlendStateObj));
         auto it = pipelines_.find(key);
         if (it != pipelines_.end()) {
-            pipelines_fast_[fk.h] = it->second;
+            pipelines_fast_.Insert(fk.h, it->second);
             return it->second;
         }
 
@@ -5806,7 +5838,7 @@ private:
             pipeline = j.pipeline;
             if (j.result != VK_SUCCESS) LogOnce("pipeline", "vkCreateGraphicsPipelines failed: %d", j.result);
             pipelines_[key] = pipeline;
-            if (pipeline) pipelines_fast_[fk.h] = pipeline;
+            if (pipeline) pipelines_fast_.Insert(fk.h, pipeline);
         }
         if (pipeline && pipelines_.size() <= 8)
             LOGI(kTag, "pipeline %zu: %zu attributes, %zu targets, depth format %d, topology %d, blend %s",
@@ -6003,8 +6035,7 @@ private:
         if (vkCreateBuffer(device_, &bi, nullptr, &geo_buf_) != VK_SUCCESS) goto fail;
         vkGetBufferMemoryRequirements(device_, geo_buf_, &req);
         ai.allocationSize = req.size;
-        ai.memoryTypeIndex =
-            FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        ai.memoryTypeIndex = StagingMemory(req.memoryTypeBits);
         if (vkAllocateMemory(device_, &ai, nullptr, &geo_mem_) != VK_SUCCESS) goto fail;
         vkBindBufferMemory(device_, geo_buf_, geo_mem_, 0);
         if (vkMapMemory(device_, geo_mem_, 0, kGeoSize, 0, &p) != VK_SUCCESS) goto fail;
@@ -6114,7 +6145,7 @@ private:
         }
         const VkDeviceSize off = geo_off_;
         geo_off_ += need;
-        memcpy(geo_ptr_ + off, src, size);
+        CopyOut(geo_ptr_ + off, src, size);
         geo_misses_++;
         geo_bytes_ += size;
         // A changed range gets new space (the old copy may still be read by frames in flight).
@@ -6151,6 +6182,58 @@ private:
         memset(dst + avail, 0, size_t(bytes - avail));
         return off;
     }
+    // ---- copies done by the recorder thread ------------------------------------------------------------------
+    // A draw's uniform and vertex data is copied from game memory into the stream / geometry cache. The render
+    // thread finds the place (cache lookups, allocation, flush decisions); the copying itself is queued for the
+    // recorder thread, which runs it before the commands that read it are submitted (all ops run in order, and
+    // the submission is an op too). Game memory must not change before the recorder has copied it: the render
+    // thread waits for the recorder (Drain) before it writes game memory itself (buffer copies and updates in a
+    // list) and at the end of each list, after which the game may reuse the memory (its syncs signal).
+    struct PendingCopy {
+        uint8_t* dst;
+        const uint8_t* src;
+        size_t size;
+    };
+    std::vector<PendingCopy> pending_copies_;
+    bool defer_copies_ = false;    // inside Draw, recorder running
+    bool copies_in_flight_ = false;  // queued since the last Drain
+    uint64_t deferred_bytes_ = 0, deferred_copies_ = 0;
+    void CopyOut(uint8_t* dst, const uint8_t* src, size_t size) {
+        if (defer_copies_ && size >= 64) {
+            pending_copies_.push_back({dst, src, size});
+            deferred_bytes_ += size;
+            deferred_copies_++;
+        } else {
+            memcpy(dst, src, size);
+        }
+    }
+    void EmitPendingCopies() {
+        if (pending_copies_.empty()) return;
+        if (!Async()) {
+            for (const PendingCopy& c : pending_copies_) memcpy(c.dst, c.src, c.size);
+            pending_copies_.clear();
+            return;
+        }
+        const size_t n = pending_copies_.size();
+        uint8_t* p = RecAlloc(16 + n * sizeof(PendingCopy), [](VulkanBackend*, uint8_t* q) {
+            const size_t count = *reinterpret_cast<const size_t*>(q);
+            const auto* c = reinterpret_cast<const PendingCopy*>(q + 16);
+            for (size_t i = 0; i < count; i++) memcpy(c[i].dst, c[i].src, c[i].size);
+        }, nullptr);
+        *reinterpret_cast<size_t*>(p) = n;
+        memcpy(p + 16, pending_copies_.data(), n * sizeof(PendingCopy));
+        pending_copies_.clear();
+        copies_in_flight_ = true;
+        MaybePublish();
+    }
+    // Before the render thread writes game memory, and at the end of a list: the recorder's copies are done.
+    void FinishCopies() {
+        EmitPendingCopies();
+        if (copies_in_flight_) {
+            Drain();
+            copies_in_flight_ = false;
+        }
+    }
     VkDeviceSize UploadCached(const uint8_t* src, size_t size, VkDeviceSize align) {
         const uint64_t key = (uint64_t(reinterpret_cast<uintptr_t>(src)) * 0x9E3779B97F4A7C15ull) ^ (uint64_t(size) << 1) ^ align;
         if (const VkDeviceSize* hit = stream_cache_.Find(key)) {
@@ -6160,7 +6243,7 @@ private:
         bool flushed = false;
         VkDeviceSize off = StreamAlloc(size, align, &flushed);
         if (off == VK_WHOLE_SIZE) return off;
-        memcpy(stream_ptr_ + off, src, size);
+        CopyOut(stream_ptr_ + off, src, size);
         upload_bytes_ += size;
         stream_cache_.Insert(key, off);
         return off;
@@ -6262,8 +6345,12 @@ private:
             LOGI(kTag, "textures that broke a render pass to become readable:%s", top.c_str());
             sampled_breaks_.clear();
         }
-        LOGI(kTag, "last 10 s: %.0f ms executing lists (%.0f ms of it waiting for the GPU), %.1f MB streamed, %llu cached uploads",
-             exec_ms_, wait_ms_, upload_bytes_ / 1048576.0, (unsigned long long)upload_hits_);
+        LOGI(kTag, "last 10 s: %.0f ms executing lists (%.0f ms of it waiting for the GPU), %.1f MB streamed, %llu cached uploads; "
+             "copied by the recorder thread: %llu copies, %.1f MB",
+             exec_ms_, wait_ms_, upload_bytes_ / 1048576.0, (unsigned long long)upload_hits_,
+             (unsigned long long)deferred_copies_, deferred_bytes_ / 1048576.0);
+        deferred_copies_ = 0;
+        deferred_bytes_ = 0;
         LOGI(kTag, "GPU busy %.0f ms in the last 10 s (%.1f ms per list); geometry hashed ahead: %llu of %llu checks%s",
              gpu_busy_ms_, list_counter_ > stat_lists_ ? gpu_busy_ms_ / double(list_counter_ - stat_lists_) : 0.0,
              (unsigned long long)prehash_used_, (unsigned long long)(prehash_used_ + prehash_inline_),
@@ -6769,17 +6856,17 @@ private:
     int slot_ = 0;      // render thread: the slot being filled
     int rec_slot_ = 0;  // recorder: the slot whose descriptor pools it allocates from
     // Hashed fronts of the caches above (no allocation per lookup).
-    std::unordered_map<uint64_t, VkSampler> samplers_fast_;
-    std::unordered_map<uint64_t, Shader*> shaders_fast_;
-    std::unordered_map<uint64_t, VkPipeline> pipelines_fast_;
+    FlatMap<VkSampler> samplers_fast_;
+    FlatMap<Shader*> shaders_fast_;
+    FlatMap<VkPipeline> pipelines_fast_;
     std::unordered_map<uint64_t, std::pair<std::vector<uint32_t>, VkDescriptorSetLayout>> set_layouts_fast_;
     VkDescriptorSetLayout last_pl_vs_ = VK_NULL_HANDLE, last_pl_fs_ = VK_NULL_HANDLE;
     VkPipelineLayout last_pl_ = VK_NULL_HANDLE;
-    std::unordered_map<uint64_t, std::pair<VkDescriptorSet, VkDescriptorSet>> desc_cache_;
+    FlatMap<std::pair<VkDescriptorSet, VkDescriptorSet>> desc_cache_;
     // Descriptor sets kept across lists (most draws bind the same textures frame after frame): their own pool,
     // emptied when an image is destroyed (the GPU is idle then) or when it is full.
     VkDescriptorPool persist_pool_ = VK_NULL_HANDLE;
-    std::unordered_map<uint64_t, std::pair<VkDescriptorSet, VkDescriptorSet>> persist_cache_;
+    FlatMap<std::pair<VkDescriptorSet, VkDescriptorSet>> persist_cache_;
     uint64_t persist_hits_ = 0, persist_resets_ = 0;
     uint64_t desc_reused_ = 0;
     VkPipeline bound_pipeline_ = VK_NULL_HANDLE;

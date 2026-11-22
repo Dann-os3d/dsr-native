@@ -84,6 +84,14 @@ struct RuntimeConfig {
     // pass_load_skip = 0: render passes always load their targets (by default a pass learned to overwrite a target
     // starts without loading it: vk_backend.cpp, PassCoverage).
     bool pass_load_skip = true;
+    // staging_memory: the memory the CPU copies each frame's vertex / uniform data into for the GPU. auto = CPU-cached
+    // (and GPU-coherent) memory where the driver offers it on Adreno (Turnip's default staging memory is uncached:
+    // the render thread's copies cost more than with Qualcomm's driver), else the first host-visible memory;
+    // cached / uncached force it either way.
+    std::string staging_memory = "auto";
+    // recorder_copies = 0: draws copy their uniform and vertex data on the render thread (by default the recorder
+    // thread does the copying: vk_backend.cpp, CopyOut).
+    bool recorder_copies = true;
     // lighter_post_fx = 1: no ambient occlusion, depth of field, camera motion blur or light shafts (the engine's own
     // switches; read at start-up). The menu turns it on with performance mode on GPUs without BC support.
     bool lighter_post_fx = false;
