@@ -116,6 +116,97 @@ const LogoSkip kLogoSkips[] = {
 };
 constexpr uint32_t kNop = 0xD503201F, kLdrS1Timer = 0xBD40E261;
 
+// Sprint "graze" check (frame-rate fix). Every update the game measures how far the player's character moved since
+// the previous update and, if it was less than 1/30 of a unit (`fmov #30`, multiply, compare with 1: below
+// 1 unit per second at the game's own 30 updates a second), takes it to be running into a wall and slows the
+// movement down: a speed factor (move control +0x1a8, 0.5..1) is multiplied by 0.8 per update, and by 1.2 per update
+// while moving again. The test is per update, so at a higher frame rate an update covers less ground: at 60 fps the
+// threshold is 2 units per second, at 120 fps 4, which a sprint (once slowed down: for good) no longer reaches -
+// the character then sprints at half speed, slower than walking. (Found from the high frame rate fix of
+// DS1 FPS Unlock for the PC version, MIT licence, github.com/zofrea1/DS1-FPS-Unlock-PTDE-Remastered: "FixGraze".)
+// The three constants now come from the scratch page and are set every frame from the game's time step (by
+// FrameLimiter): 1/step, 0.8^(30 step), 1.2^(30 step): the same test and the same slow-down / recovery per second
+// at every frame rate (at 30 fps exactly the game's).
+struct GrazeFix {
+    const char* build_id;
+    // 1.0.3 (optimised code): fmov s0,#30 / fmul s0,s0,v1.s[0] / fmov s1,wzr / tst w8,#1 / add x8,x19,#0x1a8 at
+    // `mul`, the result stored by str s0,[x8] at `store`. Rewritten as adrp x9,scratch / ldr s0,[x9,#4] / fmul /
+    // fmov / tst, the store as str s0,[x19,#0x1a8] (x8 is only its address, x9 is loaded again before it is used).
+    // 1.0.0 (unoptimised): fmov s1,#30 / fmul s0,s0,s1 / stur s0,[x29,#-0x18] / ldur s0,[x29,#-0x18] at `mul`:
+    // adrp x9,scratch / ldr s1,[x9,#4] / fmul / stur (the reload of the value just stored is dropped).
+    bool optimised;
+    uint64_t mul, store;
+    uint64_t decay, recover;  // adrp x9,page / ldr s1,[x9,#lo] loading 0.8 and 1.2: now the scratch page's
+    uint32_t decay_insn[2], recover_insn[2];
+};
+const GrazeFix kGrazeFixes[] = {
+    {"5a797a3a", false, 0x2a3be8, 0, 0x2a3c48, 0x2a3c90, {0xD0009EE9, 0xBD48CD21}, {0xD0009EE9, 0xBD495521}},
+    {"6569410c", true, 0x29c874, 0x29c8d4, 0x29c898, 0x29c8bc, {0x90009EC9, 0xBD44B521}, {0x90009EC9, 0xBD453D21}},
+    {"df3766a2", true, 0x29c874, 0x29c8d4, 0x29c898, 0x29c8bc, {0xD0009EE9, 0xBD464921}, {0xD0009EE9, 0xBD46D121}},
+};
+float* g_graze = nullptr;  // scratch page: [0] 1/step, [1] slow-down, [2] recovery per update
+
+void SetGrazeFactors(float step) {
+    if (!g_graze || !(step > 0.0f)) return;
+    g_graze[0] = 1.0f / step;
+    g_graze[1] = std::pow(0.8f, 30.0f * step);
+    g_graze[2] = std::pow(1.2f, 30.0f * step);
+}
+
+void ApplyGrazeFix(Runtime& rt, float* graze) {
+    const GrazeFix* f = nullptr;
+    for (const GrazeFix& g : kGrazeFixes)
+        if (rt.main_nso.build_id_hex.rfind(g.build_id, 0) == 0) f = &g;
+    if (!f) return;
+    const uintptr_t page = reinterpret_cast<uintptr_t>(graze);
+    const uint32_t off = uint32_t(page & 0xfff);  // 4 (after the time step)
+    auto ldr_s = [&](int rt_, uint32_t byte_off) { return 0xBD400000u | ((byte_off / 4) << 10) | (9u << 5) | uint32_t(rt_); };
+    struct P { uint64_t at; uint32_t from, to; };
+    std::vector<P> p;
+    if (f->optimised) {
+        p = {{f->mul, 0x1E27D000, rt.main.EncodeAdrp(f->mul, 9, page)},
+             {f->mul + 4, 0x5F819000, ldr_s(0, off)},
+             {f->mul + 8, 0x1E2703E1, 0x5F819000},
+             {f->mul + 12, 0x7200011F, 0x1E2703E1},
+             {f->mul + 16, 0x9106A268, 0x7200011F},
+             {f->store, 0xBD000100, 0xBD01AA60}};  // str s0,[x8] -> str s0,[x19,#0x1a8]
+    } else {
+        p = {{f->mul, 0x1E27D001, rt.main.EncodeAdrp(f->mul, 9, page)},
+             {f->mul + 4, 0x1E210800, ldr_s(1, off)},
+             {f->mul + 8, 0xBC1E83A0, 0x1E210800},
+             {f->mul + 12, 0xBC5E83A0, 0xBC1E83A0}};
+    }
+    p.push_back({f->decay, f->decay_insn[0], rt.main.EncodeAdrp(f->decay, 9, page)});
+    p.push_back({f->decay + 4, f->decay_insn[1], ldr_s(1, off + 4)});
+    p.push_back({f->recover, f->recover_insn[0], rt.main.EncodeAdrp(f->recover, 9, page)});
+    p.push_back({f->recover + 4, f->recover_insn[1], ldr_s(1, off + 8)});
+    // All checked before anything changes.
+    for (const P& x : p) {
+        const uint32_t* at = reinterpret_cast<const uint32_t*>(rt.main.base() + x.at);
+        if (*at != x.from) {
+            LOGW("hooks", "sprint frame-rate fix not applied: main+0x%lx is %08x, expected %08x", (unsigned long)x.at,
+                 *at, x.from);
+            return;
+        }
+    }
+    graze[0] = 30.0f;
+    graze[1] = 0.8f;
+    graze[2] = 1.2f;
+    std::string err;
+    size_t done = 0;
+    for (const P& x : p) {
+        if (!rt.main.PatchInstruction(x.at, x.from, x.to, &err)) break;
+        ++done;
+    }
+    if (done != p.size()) {
+        for (size_t i = done; i-- > 0;) rt.main.PatchInstruction(p[i].at, p[i].to, p[i].from, &err);
+        LOGW("hooks", "sprint frame-rate fix not applied (%s)", err.c_str());
+        return;
+    }
+    g_graze = graze;
+    LOGI("hooks", "sprint frame-rate fix: the wall check and its slow-down follow the time step");
+}
+
 // Performance mode: low-quality effects, 1024x1024 shadow maps (see GameBuild); the menu also sets render scale 0.75.
 // Each part is checked before it is changed and is skipped (logged) if the game's code or data is not as expected.
 void ApplyPerformanceMode(Runtime& rt, const GameBuild& b) {
@@ -298,7 +389,10 @@ void FrameLimiter(uint8_t* self, int /*fps*/) {
     const double slowest = rt.config.dynamic_fps ? std::min(MinFps(), 20) : 20;
     // Down to 1/60 s (fps = unlocked: one period of the screen's refresh rate).
     const double fastest = rt.config.unlocked_fps && !rt.config.dynamic_fps ? std::max(60, FixedFps(rt.config)) : 60;
-    if (g_game_step) *g_game_step = float(std::clamp(seconds, 1.0 / fastest, 1.0 / slowest));
+    if (g_game_step) {
+        *g_game_step = float(std::clamp(seconds, 1.0 / fastest, 1.0 / slowest));
+        SetGrazeFactors(*g_game_step);
+    }
     *reinterpret_cast<int64_t*>(self + b.last_tick) = hle::os::NowTicks();
     self[b.skip_active] = 0;
     self[b.skip_toggle] = 0;
@@ -498,6 +592,7 @@ void InstallGameHooks() {
         if (ok) ok = rt.main.HookFunction(b.limiter, reinterpret_cast<void*>(&FrameLimiter), &err);
         if (ok) {
             g_game_step = step;
+            ApplyGrazeFix(rt, step + 1);
             if (rt.config.dynamic_fps)
                 LOGI("hooks", "frame rate: own frame limiter, fps auto (60 / 30 / 20 fps, not below %d; changeable in game), "
                      "game time step follows the frame time", MinFps());
