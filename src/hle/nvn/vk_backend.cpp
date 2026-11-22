@@ -4448,8 +4448,7 @@ private:
     struct PhaseEnd {
         VulkanBackend* self;
         ~PhaseEnd() {
-            self->EmitPendingCopies();  // every way out of Draw (the data may be in the upload cache for later draws)
-            self->defer_copies_ = false;
+            self->defer_copies_ = false;  // queued copies are handed over in batches (CopyOut), or before a submission
             self->Phase(6);
         }
     };
@@ -6238,6 +6237,9 @@ private:
             pending_copies_.push_back({dst, src, size});
             deferred_bytes_ += size;
             deferred_copies_++;
+            // Handed over in batches: one per draw (a lock and a thread wake-up each) cost the render thread more
+            // than the copies. Copies kept back are handed over before any submission, wait or game-memory write.
+            if (pending_copies_.size() >= 256) EmitPendingCopies();
         } else {
             memcpy(dst, src, size);
         }
