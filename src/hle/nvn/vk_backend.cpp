@@ -3152,7 +3152,7 @@ private:
     // Waits until everything queued is recorded (render thread).
     void Drain() {
         if (!rec_started_) return;
-        EmitPendingCopies();
+        EmitPendingCopies();  // the slot's copies go to the worker before its submission is queued
         Publish();
         auto idle = [&] {
             return rec_queued_.load(std::memory_order_acquire) == 0 && !rec_busy_.load(std::memory_order_acquire);
@@ -3276,11 +3276,20 @@ private:
         sl.pending = true;
         sl.submits_queued++;
         sl.seq = ++submit_seq_;
-        Rec([this, i = slot_, wait, signal](VkCommandBuffer) { SubmitSlot(i, wait, signal); });
+        Rec([this, i = slot_, wait, signal, copies = copy_batches_queued_](VkCommandBuffer) {
+            WaitCopiesRecorder(copies);  // this slot's stream must be filled before the GPU reads it
+            SubmitSlot(i, wait, signal);
+        });
         Publish();  // the GPU gets it as soon as the recorder is done
         NextSlot();
     }
     // Recorder: ends slot i's command buffer and submits it (its fence always gets signalled).
+    void WaitCopiesRecorder(uint64_t target) {
+        for (int i = 0; copy_batches_done_.load(std::memory_order_acquire) < target; i++) {
+            if ((i & 1023) == 1023) std::this_thread::yield();
+            else CpuRelax();
+        }
+    }
     void SubmitSlot(int i, VkSemaphore wait, VkSemaphore signal) {
         Slot& sl = slots_[i];
         if (sl.ts) vkCmdWriteTimestamp(cmd_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, sl.ts, 1);
@@ -6182,22 +6191,48 @@ private:
         memset(dst + avail, 0, size_t(bytes - avail));
         return off;
     }
-    // ---- copies done by the recorder thread ------------------------------------------------------------------
+    // ---- copies done on a worker thread ----------------------------------------------------------------------
     // A draw's uniform and vertex data is copied from game memory into the stream / geometry cache. The render
-    // thread finds the place (cache lookups, allocation, flush decisions); the copying itself is queued for the
-    // recorder thread, which runs it before the commands that read it are submitted (all ops run in order, and
-    // the submission is an op too). Game memory must not change before the recorder has copied it: the render
-    // thread waits for the recorder (Drain) before it writes game memory itself (buffer copies and updates in a
-    // list) and at the end of each list, after which the game may reuse the memory (its syncs signal).
+    // thread finds the place (cache lookups, allocation, flush decisions) and hands the copying to a worker; the
+    // recorder waits for the copies of a slot before it submits the slot. Game memory must not change before the
+    // worker has copied it: the render thread waits for the worker before it writes game memory itself (in-list
+    // buffer copies and updates) and at the end of each list, after which the game may reuse the memory (its syncs
+    // signal). (Copying on the recorder itself made that end-of-list wait cover the recorder's whole backlog.)
     struct PendingCopy {
         uint8_t* dst;
         const uint8_t* src;
         size_t size;
     };
-    std::vector<PendingCopy> pending_copies_;
-    bool defer_copies_ = false;    // inside Draw, recorder running
-    bool copies_in_flight_ = false;  // queued since the last Drain
+    std::vector<PendingCopy> pending_copies_;  // render thread: this draw's
+    bool defer_copies_ = false;                // inside Draw, recorder running
     uint64_t deferred_bytes_ = 0, deferred_copies_ = 0;
+    std::mutex copy_mutex_;
+    std::condition_variable copy_cv_;
+    std::deque<std::vector<PendingCopy>> copy_queue_;  // under copy_mutex_
+    std::vector<std::vector<PendingCopy>> copy_free_;  // spent batches (their capacity is reused)
+    uint64_t copy_batches_queued_ = 0;                 // render thread
+    std::atomic<uint64_t> copy_batches_done_{0};
+    bool copy_started_ = false;
+    void CopyWorker() {
+        pthread_setname_np(pthread_self(), "dsr-copy");
+        dsr::platform::PreferFastCores("copy thread");
+        for (;;) {
+            std::vector<PendingCopy> batch;
+            {
+                std::unique_lock<std::mutex> lk(copy_mutex_);
+                copy_cv_.wait(lk, [&] { return !copy_queue_.empty(); });
+                batch.swap(copy_queue_.front());
+                copy_queue_.pop_front();
+            }
+            for (const PendingCopy& c : batch) memcpy(c.dst, c.src, c.size);
+            batch.clear();
+            {
+                std::lock_guard<std::mutex> lk(copy_mutex_);
+                copy_free_.push_back(std::move(batch));
+            }
+            copy_batches_done_.fetch_add(1, std::memory_order_release);
+        }
+    }
     void CopyOut(uint8_t* dst, const uint8_t* src, size_t size) {
         if (defer_copies_ && size >= 64) {
             pending_copies_.push_back({dst, src, size});
@@ -6214,25 +6249,37 @@ private:
             pending_copies_.clear();
             return;
         }
-        const size_t n = pending_copies_.size();
-        uint8_t* p = RecAlloc(16 + n * sizeof(PendingCopy), [](VulkanBackend*, uint8_t* q) {
-            const size_t count = *reinterpret_cast<const size_t*>(q);
-            const auto* c = reinterpret_cast<const PendingCopy*>(q + 16);
-            for (size_t i = 0; i < count; i++) memcpy(c[i].dst, c[i].src, c[i].size);
-        }, nullptr);
-        *reinterpret_cast<size_t*>(p) = n;
-        memcpy(p + 16, pending_copies_.data(), n * sizeof(PendingCopy));
-        pending_copies_.clear();
-        copies_in_flight_ = true;
-        MaybePublish();
+        if (!copy_started_) {
+            copy_started_ = true;
+            std::thread([this] { CopyWorker(); }).detach();
+        }
+        std::vector<PendingCopy> batch;
+        {
+            std::lock_guard<std::mutex> lk(copy_mutex_);
+            if (!copy_free_.empty()) {
+                batch.swap(copy_free_.back());
+                copy_free_.pop_back();
+            }
+            batch.swap(pending_copies_);  // pending_copies_ keeps the spent batch's capacity
+            copy_queue_.push_back(std::move(batch));
+        }
+        copy_batches_queued_++;
+        copy_cv_.notify_one();
     }
-    // Before the render thread writes game memory, and at the end of a list: the recorder's copies are done.
+    // Spins until the worker has done batch `target` (short: memcpy only).
+    void WaitCopies(uint64_t target) {
+        if (copy_batches_done_.load(std::memory_order_acquire) >= target) return;
+        MsTimer t(copy_wait_ms_);
+        for (int i = 0; copy_batches_done_.load(std::memory_order_acquire) < target; i++) {
+            if ((i & 1023) == 1023) std::this_thread::yield();
+            else CpuRelax();
+        }
+    }
+    double copy_wait_ms_ = 0;
+    // Before the render thread writes game memory, and at the end of a list: every queued copy is done.
     void FinishCopies() {
         EmitPendingCopies();
-        if (copies_in_flight_) {
-            Drain();
-            copies_in_flight_ = false;
-        }
+        WaitCopies(copy_batches_queued_);
     }
     VkDeviceSize UploadCached(const uint8_t* src, size_t size, VkDeviceSize align) {
         const uint64_t key = (uint64_t(reinterpret_cast<uintptr_t>(src)) * 0x9E3779B97F4A7C15ull) ^ (uint64_t(size) << 1) ^ align;
@@ -6346,11 +6393,12 @@ private:
             sampled_breaks_.clear();
         }
         LOGI(kTag, "last 10 s: %.0f ms executing lists (%.0f ms of it waiting for the GPU), %.1f MB streamed, %llu cached uploads; "
-             "copied by the recorder thread: %llu copies, %.1f MB",
+             "copied on the copy thread: %llu copies, %.1f MB (render thread waited %.0f ms for it)",
              exec_ms_, wait_ms_, upload_bytes_ / 1048576.0, (unsigned long long)upload_hits_,
-             (unsigned long long)deferred_copies_, deferred_bytes_ / 1048576.0);
+             (unsigned long long)deferred_copies_, deferred_bytes_ / 1048576.0, copy_wait_ms_);
         deferred_copies_ = 0;
         deferred_bytes_ = 0;
+        copy_wait_ms_ = 0;
         LOGI(kTag, "GPU busy %.0f ms in the last 10 s (%.1f ms per list); geometry hashed ahead: %llu of %llu checks%s",
              gpu_busy_ms_, list_counter_ > stat_lists_ ? gpu_busy_ms_ / double(list_counter_ - stat_lists_) : 0.0,
              (unsigned long long)prehash_used_, (unsigned long long)(prehash_used_ + prehash_inline_),

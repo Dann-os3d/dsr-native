@@ -89,8 +89,8 @@ struct RuntimeConfig {
     // the render thread's copies cost more than with Qualcomm's driver), else the first host-visible memory;
     // cached / uncached force it either way.
     std::string staging_memory = "auto";
-    // recorder_copies = 0: draws copy their uniform and vertex data on the render thread (by default the recorder
-    // thread does the copying: vk_backend.cpp, CopyOut).
+    // recorder_copies = 0: draws copy their uniform and vertex data on the render thread (by default a copy thread
+    // does the copying: vk_backend.cpp, CopyOut).
     bool recorder_copies = true;
     // lighter_post_fx = 1: no ambient occlusion, depth of field, camera motion blur or light shafts (the engine's own
     // switches; read at start-up). The menu turns it on with performance mode on GPUs without BC support.
