@@ -3273,14 +3273,47 @@ private:
                 vkGetFenceStatus(device_, sl.fence) == VK_SUCCESS)
                 DeliverReadbacks(sl);
     }
+    // Waits until the slot's submission has finished on the GPU. The slot's command buffer, stream memory and
+    // descriptor sets are reused right after, so going on while the GPU still runs it overwrites what it is reading:
+    // garbage for a frame (vertices, constants: stretched triangles, a menu drawn from the wrong part of its texture,
+    // a frame without lighting). The wait used to give up after one 5 s timeout and carry on; a Mali-G68 log showed it
+    // giving up (VK_TIMEOUT) after much less than 5 s. Now it waits again until the fence signals (a GPU that is
+    // really stuck: up to 60 s, then the whole queue), and every early return is logged.
+    uint64_t fence_retries_ = 0;
+    void WaitSlotFence(Slot& sl) {
+        const auto start = std::chrono::steady_clock::now();
+        for (int attempt = 0;; attempt++) {
+            const VkResult r = vkWaitForFences(device_, 1, &sl.fence, VK_TRUE, 5000000000ull);
+            if (r == VK_SUCCESS) return;
+            fence_retries_++;
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            static int logged = 0;
+            if (logged < 20) {
+                logged++;
+                LOGW(kTag, "GPU fence wait returned %d after %.0f ms (attempt %d): waiting again", int(r), ms, attempt + 1);
+            }
+            if (r == VK_ERROR_DEVICE_LOST) {
+                LogOnce("device-lost", "the GPU device was lost: rendering can no longer be trusted");
+                return;
+            }
+            if (r != VK_TIMEOUT) {
+                if (vkGetFenceStatus(device_, sl.fence) == VK_SUCCESS) return;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (ms > 60000.0) {
+                LOGW(kTag, "GPU has not finished a frame in 60 s: waiting for the whole queue");
+                vkQueueWaitIdle(queue_);
+                return;
+            }
+        }
+    }
     void NextSlot() {
         const int n = (slot_ + 1) % kSlots;
         Slot& sl = slots_[n];
         if (sl.pending) {
             WaitSubmitted(sl);
             MsTimer wait_timer(wait_ms_);
-            VkResult r = vkWaitForFences(device_, 1, &sl.fence, VK_TRUE, 5000000000ull);
-            if (r != VK_SUCCESS) LogOnce("fence", "GPU did not finish within 5 s (%d)", r);
+            WaitSlotFence(sl);
             DeliverReadbacks(sl);
             CollectGpuTime(sl);
             vkResetFences(device_, 1, &sl.fence);
@@ -6135,9 +6168,11 @@ private:
         }
         LOGI(kTag, "last 10 s: %.0f ms executing lists (%.0f ms of it waiting for the GPU), %.1f MB streamed, %llu cached uploads",
              exec_ms_, wait_ms_, upload_bytes_ / 1048576.0, (unsigned long long)upload_hits_);
-        LOGI(kTag, "GPU busy %.0f ms in the last 10 s (%.1f ms per list); geometry hashed ahead: %llu of %llu checks",
+        LOGI(kTag, "GPU busy %.0f ms in the last 10 s (%.1f ms per list); geometry hashed ahead: %llu of %llu checks%s",
              gpu_busy_ms_, list_counter_ > stat_lists_ ? gpu_busy_ms_ / double(list_counter_ - stat_lists_) : 0.0,
-             (unsigned long long)prehash_used_, (unsigned long long)(prehash_used_ + prehash_inline_));
+             (unsigned long long)prehash_used_, (unsigned long long)(prehash_used_ + prehash_inline_),
+             fence_retries_ ? ("; GPU fence waits repeated: " + std::to_string(fence_retries_)).c_str() : "");
+        fence_retries_ = 0;
         gpu_busy_ms_ = 0;
         stat_lists_ = list_counter_;
         prehash_used_ = prehash_inline_ = 0;
