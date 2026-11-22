@@ -245,6 +245,74 @@ std::vector<VkFormat> ImageCandidates(int f) {
     }
 }
 
+// Open-addressing hash table from 64-bit keys to V, for the per-draw caches the render thread looks up several
+// times per draw (uploads, geometry, index ranges): no allocation per entry (std::unordered_map allocated a node
+// for each of the thousands of entries a frame adds; operator new and free were ~5% of the render thread) and
+// Clear() is O(1) (a generation counter), as the upload cache is emptied at every list and every in-list write.
+// Find()'s pointer is valid until the next Insert().
+template <typename V>
+class FlatMap {
+public:
+    FlatMap() { Rehash(1024); }
+    V* Find(uint64_t key) {
+        for (size_t i = Index(key);; i = (i + 1) & mask_) {
+            Slot& s = slots_[i];
+            if (s.gen != gen_) return nullptr;
+            if (s.key == key) return &s.val;
+        }
+    }
+    V& Insert(uint64_t key, const V& v) {
+        if ((count_ + 1) * 2 > slots_.size()) Rehash(slots_.size() * 2);
+        for (size_t i = Index(key);; i = (i + 1) & mask_) {
+            Slot& s = slots_[i];
+            if (s.gen != gen_) {
+                s.gen = gen_;
+                s.key = key;
+                s.val = v;
+                count_++;
+                return s.val;
+            }
+            if (s.key == key) {
+                s.val = v;
+                return s.val;
+            }
+        }
+    }
+    void Clear() {
+        if (!count_) return;
+        count_ = 0;
+        if (++gen_ == 0) {  // wrapped: forget every slot for real
+            for (Slot& s : slots_) s.gen = 0;
+            gen_ = 1;
+        }
+    }
+    size_t size() const { return count_; }
+
+private:
+    struct Slot {
+        uint64_t key = 0;
+        uint32_t gen = 0;
+        V val{};
+    };
+    std::vector<Slot> slots_;
+    size_t mask_ = 0, count_ = 0;
+    int shift_ = 64;
+    uint32_t gen_ = 1;
+    size_t Index(uint64_t key) const { return size_t((key * 0x9E3779B97F4A7C15ull) >> shift_); }
+    void Rehash(size_t cap) {
+        std::vector<Slot> old;
+        old.swap(slots_);
+        const uint32_t old_gen = gen_;
+        slots_.assign(cap, Slot{});
+        mask_ = cap - 1;
+        shift_ = 64 - __builtin_ctzll(cap);
+        gen_ = 1;
+        count_ = 0;
+        for (const Slot& s : old)
+            if (s.gen == old_gen) Insert(s.key, s.val);
+    }
+};
+
 struct VertexFormat {
     VkFormat format = VK_FORMAT_UNDEFINED;
     uint32_t bytes = 0;
@@ -282,9 +350,16 @@ VertexFormat VertexFormatOf(int f) {
         {62, VK_FORMAT_A2B10G10R10_UINT_PACK32, 4, true, false},
         {63, VK_FORMAT_B10G11R11_UFLOAT_PACK32, 4, false, false},
     };
-    for (const E& e : kTable)
-        if (e.nvn == f) return {e.vk, e.bytes, e.i, e.s};
-    return {};
+    // Looked up for every attribute of every draw: indexed by the NVN format instead of searching the table.
+    struct Index {
+        VertexFormat v[64];
+        Index() {
+            for (const E& e : kTable)
+                if (e.nvn >= 0 && e.nvn < 64) v[e.nvn] = {e.vk, e.bytes, e.i, e.s};
+        }
+    };
+    static const Index kIndex;
+    return f >= 0 && f < 64 ? kIndex.v[f] : VertexFormat{};
 }
 
 // ---- NVN enum -> Vulkan (NVN uses GL-style orderings; confirmed from the state logs) --------------------------
@@ -1726,7 +1801,7 @@ private:
     // the commands; the slot's earlier submission has finished on the GPU).
     void ResetTransient() {
         stream_off_ = kMaxUniformRange;  // [0, 64K) is the zero buffer
-        stream_cache_.clear();
+        stream_cache_.Clear();
         Rec([this, i = slot_](VkCommandBuffer) {
             Slot& sl = slots_[i];
             rec_slot_ = i;
@@ -5442,7 +5517,17 @@ private:
         dyn_valid_ = true;
     }
 
+    int8_t vertex_format_ok_fast_[256] = {};  // 0 unknown, 1 yes, -1 no (Vulkan vertex formats are below 256)
     bool VertexFormatSupported(VkFormat f) {
+        if (uint32_t(f) < 256 && vertex_format_ok_fast_[f]) return vertex_format_ok_fast_[f] > 0;
+        if (uint32_t(f) < 256) {
+            VkFormatProperties p;
+            vkGetPhysicalDeviceFormatProperties(phys_, f, &p);
+            const bool ok = p.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT;
+            if (!ok) LOGW(kTag, "vertex format %d not supported by this GPU", int(f));
+            vertex_format_ok_fast_[f] = ok ? 1 : -1;
+            return ok;
+        }
         auto it = vertex_format_ok_.find(f);
         if (it != vertex_format_ok_.end()) return it->second;
         VkFormatProperties p;
@@ -5745,13 +5830,23 @@ private:
             return isz == 2 ? reinterpret_cast<const uint16_t*>(ib)[i] : reinterpret_cast<const uint32_t*>(ib)[i];
         };
         uint64_t key = (addr * 0x9E3779B97F4A7C15ull) ^ (uint64_t(count) << 32) ^ isz;
+        // Within one list (one token: memory the list draws from does not change while it runs) the same index
+        // buffer is drawn several times (depth, shadow and colour passes): its range is taken from the first time,
+        // without sampling the buffer again.
+        const uint64_t memo_key = key;
+        if (const IndexMemo* m = index_memo_.Find(memo_key); m && m->token == geo_token_) {
+            *lo = m->lo;
+            *hi = m->hi;
+            return;
+        }
         const uint32_t step = std::max<uint32_t>(1, count / 16);
         for (uint32_t i = 0; i < count; i += step) key = (key ^ at(i)) * 0x100000001B3ull;
         key = (key ^ at(count - 1)) * 0x100000001B3ull;
-        auto it = index_ranges_.find(key);
-        if (it != index_ranges_.end()) {
-            *lo = it->second.first;
-            *hi = it->second.second;
+        if (const std::pair<uint32_t, uint32_t>* r = index_ranges_.Find(key)) {
+            *lo = r->first;
+            *hi = r->second;
+            if (index_memo_.size() > 100000) index_memo_.Clear();
+            index_memo_.Insert(memo_key, {r->first, r->second, geo_token_});
             return;
         }
         uint32_t mn = UINT32_MAX, mx = 0;
@@ -5760,8 +5855,10 @@ private:
             mn = std::min(mn, v);
             mx = std::max(mx, v);
         }
-        if (index_ranges_.size() > 200000) index_ranges_.clear();
-        index_ranges_[key] = {mn, mx};
+        if (index_ranges_.size() > 200000) index_ranges_.Clear();
+        index_ranges_.Insert(key, {mn, mx});
+        if (index_memo_.size() > 100000) index_memo_.Clear();
+        index_memo_.Insert(memo_key, {mn, mx, geo_token_});
         *lo = mn;
         *hi = mx;
     }
@@ -5805,7 +5902,7 @@ private:
     std::unique_ptr<PrehashJob[]> prehash_jobs_;
     size_t prehash_capacity_ = 0;
     std::atomic<size_t> prehash_count_{0};
-    std::unordered_map<uint64_t, size_t> prehash_index_;
+    FlatMap<size_t> prehash_index_;
     std::atomic<size_t> prehash_next_{0};
     std::atomic<int> prehash_active_{0};  // workers inside the job loop
     uint64_t prehash_generation_ = 0;     // under prehash_mutex_
@@ -5847,7 +5944,7 @@ private:
         while (prehash_active_.load() != 0) std::this_thread::yield();
         geo_used_prev_.swap(geo_used_now_);
         geo_used_now_.clear();
-        prehash_index_.clear();
+        prehash_index_.Clear();
         const size_t n = geo_used_prev_.size();
         if (n > prehash_capacity_) {
             prehash_jobs_.reset(new PrehashJob[n * 2]);
@@ -5855,14 +5952,14 @@ private:
         }
         size_t count = 0;
         for (uint64_t key : geo_used_prev_) {
-            auto it = geo_.find(key);
-            if (it == geo_.end() || it->second.changes >= 2 || !it->second.src) continue;
+            const GeoEntry* e = geo_.Find(key);
+            if (!e || e->changes >= 2 || !e->src) continue;
             PrehashJob& j = prehash_jobs_[count];
             j.key = key;
-            j.src = it->second.src;
-            j.size = it->second.size;
+            j.src = e->src;
+            j.size = e->size;
             j.done.store(false, std::memory_order_relaxed);
-            prehash_index_[key] = count;
+            prehash_index_.Insert(key, count);
             count++;
         }
         prehash_count_.store(count);
@@ -5873,7 +5970,7 @@ private:
         }
         prehash_cv_.notify_all();
     }
-    std::unordered_map<uint64_t, GeoEntry> geo_;
+    FlatMap<GeoEntry> geo_;
     // Geometry content is checked once per token: a new token with each list, and whenever the list itself
     // writes game memory (buffer-to-buffer copies, inline buffer updates). Draws after such a write in the same
     // list used the copy checked before it: stale particle quads (holes in smoke and dust). Hashes made ahead
@@ -5882,7 +5979,8 @@ private:
     uint64_t list_b2b_copies_ = 0, list_updates_ = 0;
     uintptr_t geo_lo_ = UINTPTR_MAX, geo_hi_ = 0;  // span of the geometry checked under the current token
     void MemoryWrittenInList(uint64_t addr, uint64_t size) {
-        stream_cache_.clear();
+        stream_cache_.Clear();
+        index_memo_.Clear();
         if (addr < geo_hi_ && addr + size > geo_lo_) {
             geo_token_++;
             geo_lo_ = UINTPTR_MAX;
@@ -5965,14 +6063,14 @@ private:
     VkDeviceSize GeoCached(const uint8_t* src, size_t size) {
         if (size == 0 || size > (16u << 20) || !EnsureGeo()) return VK_WHOLE_SIZE;
         const uint64_t key = (uint64_t(reinterpret_cast<uintptr_t>(src)) * 0x9E3779B97F4A7C15ull) ^ uint64_t(size);
-        auto it = geo_.find(key);
-        if (it != geo_.end() && it->second.changes >= 2) {
+        GeoEntry* it = geo_.Find(key);
+        if (it && it->changes >= 2) {
             geo_volatile_++;
             return VK_WHOLE_SIZE;  // rewritten every frame or so: streamed with the list
         }
-        if (it != geo_.end() && it->second.checked_list == geo_token_) {
+        if (it && it->checked_list == geo_token_) {
             geo_hits_++;
-            return it->second.off;
+            return it->off;
         }
         geo_used_now_.push_back(key);
         geo_lo_ = std::min(geo_lo_, reinterpret_cast<uintptr_t>(src));
@@ -5981,26 +6079,25 @@ private:
         // game reused for another mesh of the same size) for a few frames: flickering textures. The hash usually
         // comes from a worker thread (hashed at the start of the list).
         uint64_t h;
-        auto pre = prehash_index_.find(key);
-        if (pre != prehash_index_.end() && geo_token_ == geo_token_list_ &&
-            prehash_jobs_[pre->second].done.load(std::memory_order_acquire) &&
-            prehash_jobs_[pre->second].src == src) {
-            h = prehash_jobs_[pre->second].hash;
+        const size_t* pre = prehash_index_.Find(key);
+        if (pre && geo_token_ == geo_token_list_ && prehash_jobs_[*pre].done.load(std::memory_order_acquire) &&
+            prehash_jobs_[*pre].src == src) {
+            h = prehash_jobs_[*pre].hash;
             prehash_used_++;
         } else {
             h = GeoHash(src, size);
             prehash_inline_++;
         }
-        if (it != geo_.end() && it->second.hash == h) {
+        if (it && it->hash == h) {
             geo_hits_++;
-            it->second.checked_list = geo_token_;
-            it->second.interval = std::min<uint32_t>(it->second.interval * 2, 8);
-            it->second.next_check_list = list_counter_ + it->second.interval;
-            return it->second.off;
+            it->checked_list = geo_token_;
+            it->interval = std::min<uint32_t>(it->interval * 2, 8);
+            it->next_check_list = list_counter_ + it->interval;
+            return it->off;
         }
-        const uint32_t changes = it != geo_.end() ? it->second.changes + 1 : 0;
+        const uint32_t changes = it ? it->changes + 1 : 0;
         if (changes >= 2) {
-            it->second.changes = changes;
+            it->changes = changes;
             geo_volatile_++;
             return VK_WHOLE_SIZE;
         }
@@ -6009,11 +6106,11 @@ private:
             // Full: start over once the GPU no longer reads any of it.
             Flush();
             WaitGpuIdle();
-            geo_.clear();
+            geo_.Clear();
             geo_off_ = 0;
             geo_resets_++;
             InvalidateBoundState();
-            it = geo_.end();
+            it = nullptr;
         }
         const VkDeviceSize off = geo_off_;
         geo_off_ += need;
@@ -6021,7 +6118,7 @@ private:
         geo_misses_++;
         geo_bytes_ += size;
         // A changed range gets new space (the old copy may still be read by frames in flight).
-        geo_[key] = {h, off, changes, list_counter_ + 1, 1, geo_token_, src, size};
+        geo_.Insert(key, {h, off, changes, list_counter_ + 1, 1, geo_token_, src, size});
         return off;
     }
 
@@ -6056,17 +6153,16 @@ private:
     }
     VkDeviceSize UploadCached(const uint8_t* src, size_t size, VkDeviceSize align) {
         const uint64_t key = (uint64_t(reinterpret_cast<uintptr_t>(src)) * 0x9E3779B97F4A7C15ull) ^ (uint64_t(size) << 1) ^ align;
-        auto it = stream_cache_.find(key);
-        if (it != stream_cache_.end()) {
+        if (const VkDeviceSize* hit = stream_cache_.Find(key)) {
             upload_hits_++;
-            return it->second;
+            return *hit;
         }
         bool flushed = false;
         VkDeviceSize off = StreamAlloc(size, align, &flushed);
         if (off == VK_WHOLE_SIZE) return off;
         memcpy(stream_ptr_ + off, src, size);
         upload_bytes_ += size;
-        stream_cache_[key] = off;
+        stream_cache_.Insert(key, off);
         return off;
     }
 
@@ -6471,7 +6567,7 @@ private:
     VkDeviceMemory stream_memory_ = VK_NULL_HANDLE;
     uint8_t* stream_ptr_ = nullptr;
     VkDeviceSize stream_off_ = 0, zero_offset_ = 0;
-    std::unordered_map<uint64_t, VkDeviceSize> stream_cache_;
+    FlatMap<VkDeviceSize> stream_cache_;
     uint64_t upload_hits_ = 0, upload_bytes_ = 0;
     uint64_t depth_gen_ = 0;
     // HUD box for other aspect ratios (see Draw): size, 0 = off.
@@ -6600,7 +6696,12 @@ private:
     std::vector<CaptureItem> capture_items_;
     VkExtent2D no_attachment_extent_{0, 0};  // render area for a draw with no attachments (storage-only)
     uint64_t fast_draws_ = 0, big_checks_ = 0, big_changes_ = 0;
-    std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> index_ranges_;
+    FlatMap<std::pair<uint32_t, uint32_t>> index_ranges_;
+    struct IndexMemo {
+        uint32_t lo, hi;
+        uint64_t token;  // geo_token_ it was found under
+    };
+    FlatMap<IndexMemo> index_memo_;
     VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
     int new_pipelines_ = 0;
     double compile_ms_ = 0;
