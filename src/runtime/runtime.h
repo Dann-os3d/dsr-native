@@ -97,7 +97,7 @@ struct RuntimeConfig {
     // switches; read at start-up). The menu turns it on with performance mode on GPUs without BC support.
     bool lighter_post_fx = false;
     // lighting_lite = 1: experimental preset combining verified low-quality VFX, reduced shadow-map
-    // resolution and lighter post-processing. This does not disable every lighting or shadow pass.
+    // resolution (512x512) and lighter post-processing. This does not disable every lighting or shadow pass.
     bool lighting_lite = false;
     // skip_intro = 1: the company logos at the start are skipped (straight to the title movie).
     bool skip_intro = false;
