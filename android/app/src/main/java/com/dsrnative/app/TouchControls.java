@@ -122,8 +122,11 @@ public final class TouchControls extends View implements InputManager.InputDevic
     public static void attach(final Activity activity, final float opacity, final float cameraSpeed,
             final boolean enabled) {
         activity.runOnUiThread(() -> {
-            if (sView != null || !enabled || sEditing) return;
+            if (sView != null || sEditing) return;
             final TouchControls v = new TouchControls(activity, opacity, cameraSpeed);
+            // Keep the lightweight overlay alive even when touch controls are disabled: its
+            // settings shortcut remains available to controller players as well.
+            v.mShown = enabled;
             v.addTo(activity, 0);
         });
     }
@@ -135,19 +138,9 @@ public final class TouchControls extends View implements InputManager.InputDevic
             final float cameraSpeed) {
         activity.runOnUiThread(() -> {
             if (!enabled) {
-                if (sView != null) {
-                    TouchControls v = sView;
-                    sView = null;
-                    v.releaseAll();
-                    nativeVisible(false);
-                    InputManager im = (InputManager) activity.getSystemService(Context.INPUT_SERVICE);
-                    if (im != null) im.unregisterInputDeviceListener(v);
-                    try {
-                        activity.getWindowManager().removeView(v);
-                    } catch (Exception e) {
-                        android.util.Log.w("DSRNative", "touch controls: could not remove the overlay", e);
-                    }
-                }
+                // Hide the game controls, not the overlay itself: the quick settings button
+                // must remain reachable when playing with a physical controller.
+                if (sView != null) sView.setShown(false);
                 return;
             }
             if (sView == null) {
@@ -726,6 +719,11 @@ public final class TouchControls extends View implements InputManager.InputDevic
             return true;
         }
         final int action = e.getActionMasked();
+        if ((action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN)
+                && quickSettingsHit(e.getX(e.getActionIndex()), e.getY(e.getActionIndex()))) {
+            SettingsMenu.show(mActivity);
+            return true;
+        }
         if (!mShown) {
             if (action == MotionEvent.ACTION_DOWN) checkDoubleTap(e.getX(), e.getY());
             return true;
@@ -888,10 +886,39 @@ public final class TouchControls extends View implements InputManager.InputDevic
         nativeState(bits, lx, ly, rx, ry);
     }
 
+    // A small, always-visible shortcut in the top-right corner. It is deliberately outside
+    // the editable game-control layout and remains available when touch controls are hidden.
+    private boolean quickSettingsHit(float x, float y) {
+        float size = 46f * mDensity;
+        float margin = 14f * mDensity;
+        float cx = getWidth() - margin - size / 2f;
+        float cy = margin + size / 2f;
+        float radius = size * 0.62f;
+        float dx = x - cx, dy = y - cy;
+        return dx * dx + dy * dy <= radius * radius;
+    }
+
+    private void drawQuickSettingsButton(Canvas c) {
+        if (getWidth() <= 0 || getHeight() <= 0) return;
+        float size = 46f * mDensity;
+        float margin = 14f * mDensity;
+        float cx = getWidth() - margin - size / 2f;
+        float cy = margin + size / 2f;
+        mFill.setColor(0xB8202020);
+        c.drawCircle(cx, cy, size / 2f, mFill);
+        mStroke.setStrokeWidth(1.5f * mDensity);
+        mStroke.setColor(0xD0FFFFFF);
+        c.drawCircle(cx, cy, size / 2f, mStroke);
+        mText.setColor(0xFFFFFFFF);
+        mText.setTextSize(25f * mDensity);
+        c.drawText("⚙", cx, cy - (mText.ascent() + mText.descent()) / 2f, mText);
+    }
+
     // ---- drawing --------------------------------------------------------------------------------------------
 
     @Override
     protected void onDraw(Canvas c) {
+        drawQuickSettingsButton(c);
         if (!mShown) return;
         if (mEditing) c.drawColor(0x50000000);
         // Stick (the knob stays inside the ring).
