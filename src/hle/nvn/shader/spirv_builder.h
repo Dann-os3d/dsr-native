@@ -52,6 +52,7 @@ public:
         Emit(exec_modes_, SpvOpExecutionMode, w);
     }
     void Name(Id id, const char* name) {
+        if (!emit_debug_names) return;
         std::vector<uint32_t> w = {id};
         AppendString(w, name);
         Emit(debug_, SpvOpName, w);
@@ -159,6 +160,8 @@ public:
     // fuses them into FMAs does so differently in different shaders, so two shaders computing the same vertex
     // position no longer agree to the bit (Maxwell keeps FMUL/FADD unfused; FFMA is emitted as an explicit Fma).
     bool exact_float = false;
+    // Debug names help SPIR-V disassembly, but are unnecessary for production GPU modules.
+    bool emit_debug_names = true;
     void MaybeExact(SpvOp op, Id id) {
         if (exact_float && (op == SpvOpFMul || op == SpvOpFAdd || op == SpvOpFSub || op == SpvOpFNegate ||
                             op == SpvOpVectorTimesScalar || op == SpvOpDot))
