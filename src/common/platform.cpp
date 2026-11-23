@@ -261,6 +261,14 @@ void UseAllCores() {
 #endif
 }
 
+int FastCoreCount() {
+#if defined(__ANDROID__)
+    return GetFastCores().count;
+#else
+    return 0;  // Unknown on non-Android hosts; preserve the generic worker policy.
+#endif
+}
+
 void ReleaseInheritedPin() {
 #if defined(__ANDROID__)
     if (FewFastCores()) SetAllCores();
