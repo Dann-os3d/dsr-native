@@ -85,3 +85,7 @@ This is **not** full lighting shutdown and does not skip the shadow-rendering pa
 ### Stage A2 — minimum documented shadow-map resolution
 
 The Lighting-lite preset now selects 512x512 shadow maps instead of 1024x1024. The game build metadata documents 512..2048 as the supported debug-menu range, and the renderer sizes its shadow target and texel offsets from this global. The patch remains conditional: it writes 512 only when the expected global is inside the mapped main module and currently equals 2048. It does not suppress shadow rendering. The Android build and device behavior for this change still require validation.
+
+### Stage B investigation — current limitation
+
+The current hook metadata exposes a validated shadow-map size global and a separate LightShaft draw-group switch, but it does not expose a verified shadow-pass enable flag or a complete list of shadow-pass dependencies. The Vulkan backend source handles generic image transitions and render-pass execution; it does not provide a game-specific semantic switch for the shadow pass. Therefore, disabling shadows by suppressing generic Vulkan passes or guessing another game-code offset would be unsafe and is not being committed. A real Stage B patch requires disassembly of the exact supported game binaries/build IDs and confirmation of the pass mask, resource lifetime, and frame-to-frame shadow target behavior.
