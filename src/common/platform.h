@@ -29,6 +29,8 @@ bool TakeText(bool* ok, std::u16string* text);
 void PreferFastCores(const char* who, bool essential = false);
 // Lets the calling thread run on every CPU (background workers created by pinned threads inherit their pin).
 void UseAllCores();
+// Number of detected performance cores on Android; 0 when unavailable or on other platforms.
+int FastCoreCount();
 // On chips with fewer than 4 fast cores: drops a fast-core pin inherited from the creating thread (game threads).
 void ReleaseInheritedPin();
 
