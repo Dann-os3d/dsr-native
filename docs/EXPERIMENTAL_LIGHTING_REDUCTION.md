@@ -63,4 +63,20 @@ A result is useful only if it improves boss-scene frame pacing without introduci
 
 ## Current status
 
-Design/research proposal only. No lighting-disable patch has been applied yet. The existing controls are documented above; complete lighting/shadow shutdown still requires reverse-engineering and device validation.
+### Stage A — implemented in source, awaiting build/device validation
+
+The branch now includes an opt-in `lighting_lite` setting in the Graphics tab. It is parsed from `settings.txt` and, when enabled, applies the existing checked `ApplyPerformanceMode` and `ApplyLighterPostFx` patches together. It does not change the default path when OFF.
+
+The preset currently means:
+- low-quality VFX path;
+- shadow map size reduced from 2048 to 1024 where the expected game data is present;
+- ambient occlusion, depth of field, camera motion blur and light shafts disabled.
+
+This is **not** full lighting shutdown and does not skip the shadow-rendering pass. No APK build or physical-device test has yet been confirmed for this implementation.
+
+### Remaining work
+
+- Confirm the Android/native build and host tests pass.
+- Test on Mali-G57 MC2, comparing the same exploration and boss scenes with the preset OFF/ON.
+- Inspect frame pacing, GPU busy time, flicker/black frames and visual regressions.
+- Only then research deeper shadow-pass suppression and separate lighting systems.
