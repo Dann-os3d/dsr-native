@@ -1309,8 +1309,12 @@ public final class SettingsMenu {
         mBody.addView(row, lp);
     }
 
-    /** Render scale performance mode sets (the player can move it afterwards; turning the mode off restores theirs). */
-    private static final String PERF_SCALE = "0.75";
+    /**
+     * Aggressive performance mode: render at half resolution (one quarter of native pixel count).
+     * This is intentionally a strong GPU-bound fallback for devices such as Mali-G57; the player can
+     * raise the scale afterwards, and turning performance mode off restores their previous value.
+     */
+    private static final String PERF_SCALE = "0.50";
 
     /** 1: the GPU has no BC support (performance mode then turns texture_mip_skip on too). */
     private static boolean gpuLacksBc() {
@@ -1322,7 +1326,7 @@ public final class SettingsMenu {
     }
 
     /**
-     * Performance mode on: remembers the render scale and sets 75%, and on GPUs without BC support remembers
+     * Performance mode on: remembers the render scale and sets 50%, and on GPUs without BC support remembers
      * texture_mip_skip and turns it on; off: puts the remembered values back.
      */
     private void performanceScale(boolean on) {
