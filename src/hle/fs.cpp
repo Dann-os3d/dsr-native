@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "common/log.h"
+#include "hle/gameparam_drops.h"
 #include "hle/registry.h"
 #include "runtime/runtime.h"
 
@@ -166,6 +167,32 @@ HLE_FUNC(_ZN2nn2fs9CloseFileENS0_10FileHandleE, void, fs_CloseFile, (HostFile * 
     close(f->fd);
     delete f;
 }
+// enemy_drops_100: the game reads GameParam.parambnd.dcx from a dvdbnd*.bdt in one read; ItemLotParam is changed in
+// that buffer. Only a DCX read from a .bdt whose first bytes match is looked at, so other reads cost one compare.
+static void MaybePatchDrops(const HostFile* f, uint8_t* buf, size_t size) {
+    if (buf[1] != 'C' || buf[2] != 'X' || buf[3] != 0) return;
+    const size_t slash = f->path.rfind('/');
+    const char* name = f->path.c_str() + (slash == std::string::npos ? 0 : slash + 1);
+    if (strncmp(name, "dvdbnd", 6) != 0) return;
+    static bool logged_ok = false, logged_fail = false;
+    size_t slots = 0;
+    const char* why = "";
+    switch (dsr::hle::PatchGameParamDrops(buf, size, &slots, &why)) {
+        case dsr::hle::DropPatch::Patched:
+            if (!logged_ok) LOGI(kTag, "enemy_drops_100: GameParam patched, %zu item slots now drop 100%%", slots);
+            logged_ok = true;
+            break;
+        case dsr::hle::DropPatch::AlreadyFull:
+            if (!logged_ok) LOGI(kTag, "enemy_drops_100: GameParam already has 100%% drops (%zu item slots)", slots);
+            logged_ok = true;
+            break;
+        case dsr::hle::DropPatch::Failed:
+            if (!logged_fail) LOGW(kTag, "enemy_drops_100: GameParam NOT patched: %s", why);
+            logged_fail = true;
+            break;
+        case dsr::hle::DropPatch::NotGameParam: break;
+    }
+}
 static uint32_t ReadImpl(size_t* out, HostFile* f, int64_t off, void* buf, size_t size) {
     size_t done = 0;
     while (done < size) {
@@ -178,6 +205,8 @@ static uint32_t ReadImpl(size_t* out, HostFile* f, int64_t off, void* buf, size_
         done += size_t(r);
     }
     if (out) *out = done;
+    if (done == size && size > 0x4C && static_cast<const char*>(buf)[0] == 'D' && dsr::GetRuntime().config.enemy_drops_100)
+        MaybePatchDrops(f, static_cast<uint8_t*>(buf), size);
     return kOk;
 }
 HLE_FUNC(_ZN2nn2fs8ReadFileENS0_10FileHandleElPvm, uint32_t, fs_ReadFile,

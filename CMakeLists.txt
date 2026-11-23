@@ -33,6 +33,14 @@ endif()
 
 add_library(dsrcore OBJECT ${DSR_CORE_SOURCES})
 target_include_directories(dsrcore PUBLIC src third_party/spirv)
+if(NOT ANDROID)
+    # enemy_drops_100 (hle/gameparam_drops.cpp) inflates / deflates GameParam. The Android target links z itself;
+    # without zlib on the host the patch reports "built without zlib" and everything else builds as before.
+    find_package(ZLIB QUIET)
+    if(ZLIB_FOUND)
+        target_link_libraries(dsrcore PUBLIC ZLIB::ZLIB)
+    endif()
+endif()
 target_compile_options(dsrcore PRIVATE
     -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wno-cast-function-type
     $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
