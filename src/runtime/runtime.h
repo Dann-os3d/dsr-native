@@ -75,6 +75,9 @@ struct RuntimeConfig {
     // mali_barriers = 1 (PR #13): narrow layout-transition barriers (destination = the stages that use the image) and
     // render targets made readable when their pass ends, so a tile-based GPU (Mali) can overlap passes. Off by default.
     bool mali_barriers = false;
+    // mali_tile_turbo = 1: use layout-derived source/destination stages and access masks for known image transitions.
+    // Unknown layouts retain the conservative ALL_COMMANDS / MEMORY_READ|WRITE barrier.
+    bool mali_tile_turbo = false;
     // performance_mode = 1: the engine's own lower-quality options: low-quality effects, 1024x1024 shadow maps instead
     // of 2048x2048 (read at start-up). The menu also sets render_scale 0.50 when it is turned on.
     bool performance_mode = false;
