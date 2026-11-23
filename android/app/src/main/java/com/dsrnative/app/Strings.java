@@ -310,6 +310,19 @@ final class Strings {
                 "Barreras para GPU por mosaicos (experimental)", "Barreiras para GPU em blocos (experimental)",
                 "Барьеры для плиточных GPU (эксперимент)", "タイル GPU 用バリア（実験的）", "타일 GPU 배리어 (실험적)",
                 "分块 GPU 屏障（实验性）", "分塊 GPU 屏障（實驗性）");
+        put("tile_turbo_t", "Mali Tile Turbo (experimental)", "Mali Tile Turbo (expérimental)", "Mali Tile Turbo (experimentell)", "Mali Tile Turbo (sperimentale)", "Mali Tile Turbo (experimental)", "Mali Tile Turbo (experimental)", "Mali Tile Turbo (эксперимент)", "Mali Tile Turbo（実験的）", "Mali Tile Turbo (실험적)", "Mali Tile Turbo（实验性）", "Mali Tile Turbo（實驗性）");
+        put("tile_turbo_n",
+                "Uses image-layout-aware Vulkan synchronization on Mali. Unknown cases keep conservative barriers. Keep the older Tile-GPU barriers option off while testing.",
+                "Utilise une synchronisation Vulkan adaptée aux layouts d'image sur Mali. Les cas inconnus gardent des barrières prudentes. Laissez l'ancienne option désactivée pendant les tests.",
+                "Verwendet auf Mali eine layoutabhängige Vulkan-Synchronisierung. Unbekannte Fälle behalten konservative Barrieren. Die ältere Option zum Testen ausgeschaltet lassen.",
+                "Usa la sincronizzazione Vulkan basata sui layout delle immagini su Mali. I casi sconosciuti mantengono barriere conservative. Tenere disattivata la vecchia opzione durante i test.",
+                "Usa sincronización Vulkan según el layout real de las imágenes en Mali. Los casos desconocidos conservan barreras seguras. Mantén desactivada la opción antigua durante las pruebas.",
+                "Usa sincronização Vulkan baseada no layout das imagens em Mali. Casos desconhecidos mantêm barreiras conservadoras. Deixe a opção antiga desligada durante os testes.",
+                "Использует синхронизацию Vulkan с учётом layout изображений на Mali. Неизвестные случаи сохраняют безопасные барьеры. Старую опцию при тестировании отключить.",
+                "Mali で画像レイアウトに応じた Vulkan 同期を使用します。不明なケースでは保守的なバリアを維持します。テスト中は旧オプションをオフにしてください。",
+                "Mali에서 이미지 레이아웃 기반 Vulkan 동기화를 사용합니다. 알 수 없는 경우 안전한 배리어를 유지합니다. 테스트 중에는 기존 옵션을 끄세요.",
+                "在 Mali 上使用基于图像布局的 Vulkan 同步。未知情况保留保守屏障。测试时请关闭旧选项。",
+                "在 Mali 上使用依影像配置的 Vulkan 同步。未知情況保留保守屏障。測試時請關閉舊選項。");
         put("malib_n", "Lets GPUs like Mali overlap rendering passes. Turn off if effects flicker or go missing.",
                 "Permet aux GPU comme Mali de chevaucher les passes de rendu. Désactivez si des effets clignotent ou disparaissent.",
                 "Lässt GPUs wie Mali Renderdurchläufe überlappen. Ausschalten, wenn Effekte flackern oder fehlen.",
