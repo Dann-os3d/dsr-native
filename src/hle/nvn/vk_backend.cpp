@@ -6233,6 +6233,7 @@ private:
     uint64_t deferred_bytes_ = 0, deferred_copies_ = 0;
     std::mutex copy_mutex_;
     std::condition_variable copy_cv_;
+    std::condition_variable copy_done_cv_;
     std::deque<std::vector<PendingCopy>> copy_queue_;  // under copy_mutex_
     std::vector<std::vector<PendingCopy>> copy_free_;  // spent batches (their capacity is reused)
     uint64_t copy_batches_queued_ = 0;                 // render thread
@@ -6254,8 +6255,9 @@ private:
             {
                 std::lock_guard<std::mutex> lk(copy_mutex_);
                 copy_free_.push_back(std::move(batch));
+                copy_batches_done_.fetch_add(1, std::memory_order_release);
             }
-            copy_batches_done_.fetch_add(1, std::memory_order_release);
+            copy_done_cv_.notify_all();
         }
     }
     void CopyOut(uint8_t* dst, const uint8_t* src, size_t size) {
@@ -6294,14 +6296,20 @@ private:
         copy_batches_queued_++;
         copy_cv_.notify_one();
     }
-    // Spins until the worker has done batch `target` (short: memcpy only).
+    // Copy batches are short: spin briefly for the common fast path, then sleep instead of
+    // burning a performance core while waiting for memory copies on small big.LITTLE devices.
     void WaitCopies(uint64_t target) {
         if (copy_batches_done_.load(std::memory_order_acquire) >= target) return;
         MsTimer t(copy_wait_ms_);
-        for (int i = 0; copy_batches_done_.load(std::memory_order_acquire) < target; i++) {
-            if ((i & 1023) == 1023) std::this_thread::yield();
-            else CpuRelax();
-        }
+        const auto spin_until = std::chrono::steady_clock::now() + std::chrono::microseconds(50);
+        while (copy_batches_done_.load(std::memory_order_acquire) < target &&
+               std::chrono::steady_clock::now() < spin_until)
+            CpuRelax();
+        if (copy_batches_done_.load(std::memory_order_acquire) >= target) return;
+        std::unique_lock<std::mutex> lk(copy_mutex_);
+        copy_done_cv_.wait(lk, [&] {
+            return copy_batches_done_.load(std::memory_order_acquire) >= target;
+        });
     }
     double copy_wait_ms_ = 0;
     // Before the render thread writes game memory, and at the end of a list: every queued copy is done.
