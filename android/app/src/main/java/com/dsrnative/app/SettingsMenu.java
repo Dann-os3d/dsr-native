@@ -452,6 +452,8 @@ public final class SettingsMenu {
         renderScale();  // performance mode sets 75%; it can be moved freely afterwards
         toggle("lighter_post_fx", Strings.t("post_t"), Strings.t("post_n") + " " + Strings.t("changes_next"), "1", "0",
                 "0");
+        toggle("lighting_lite", Strings.t("lighting_lite_t"), Strings.t("lighting_lite_n") + " "
+                + Strings.t("changes_next"), "1", "0", "0");
 
         section(Strings.t("sec_gpu"));
         note(Strings.t("gpu_n"));
