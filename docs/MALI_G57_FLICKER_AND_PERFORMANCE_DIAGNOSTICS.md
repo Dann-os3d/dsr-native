@@ -57,3 +57,28 @@ The settings above are diagnostic controls, not a permanent default. Restore the
 A change is not considered Mali-compatible until the system driver completes repeated menu, exploration, transition and boss-scene tests without new flicker, black frames, missing effects or crashes. Report FPS and frame pacing alongside thermal state; one short peak-FPS reading is insufficient.
 
 No physical Helio G99 test or Vulkan validation-layer run is performed by this source audit.
+
+
+## Helio G99 / Mali-G57 engine adaptation — next phase
+
+The first device report confirms build `1b72cf0`, system Vulkan driver, render scale 0.65, 60 FPS target, `mali_barriers=1`, `performance_mode=1`, `lighter_post_fx=1`, and `render_pass_objects=0`. The excerpt supplied for this run contains startup/configuration only; it does not include the fatal signal, native backtrace, Vulkan error, or last game zone before the crash. No crash cause can be assigned from that excerpt.
+
+### Engineering order
+
+1. **Crash classification:** collect the complete DSR log and logcat tail around the first fatal event. Classify as native signal/abort, Vulkan device loss, failed resource allocation, shader translation/pipeline failure, or guest-game fault before changing synchronization.
+2. **GPU identification:** log vendor/device IDs, pipeline-cache UUID prefix, and the actually selected rendering path. This is now emitted during Vulkan initialization so device profiles can be keyed to hardware/driver identity rather than the marketing name alone.
+3. **Mali barrier A/B:** the reported configuration has `mali_barriers=1`. Repeat the same crash-prone zone with only this option changed to 0. This isolates the experimental narrow-destination-stage barrier path from the conservative ALL_COMMANDS destination path. Do not change render scale, FPS, or effects during this comparison.
+4. **Render path validation:** the render-pass-object option only overrides dynamic rendering when the driver exposes dynamic rendering. On Vulkan 1.1 / devices reporting dynamic rendering unavailable, the backend already selects render-pass/framebuffer objects automatically; the setting cannot change that path.
+5. **Shader translation:** inventory Maxwell opcodes used by the game's actual shader set, record translation failures and pipeline creation results, and add deterministic host tests for each supported instruction family before adding optimization passes. Preserve shader semantics, depth compare, discard, derivatives, and texture sampling.
+6. **GPU workload reduction:** profile pass counts, barriers, render-target transitions, texture uploads, pipeline compilation, and GPU-busy time in the same scene. Optimize the measured dominant category, not guessed bottlenecks.
+7. **Submission and synchronization:** audit swapchain acquire/present semaphore ownership, slot fences, command recorder handoff, and device-loss recovery. No global barrier weakening or queue restructuring until the crash is reproducible and synchronization ownership is proven.
+
+### Current architectural facts
+
+- Guest Maxwell shaders are translated to SPIR-V by `src/hle/nvn/shader/translator.cpp`; this is the shader translation layer to validate for Mali.
+- NVN-like render commands are executed by the Vulkan backend in `src/hle/nvn/vk_backend.cpp`.
+- The backend already has a persistent Vulkan pipeline cache, background pipeline compiler threads, four submission slots, GPU timing summaries, upload counters, and barrier counters. These should be measured before replacing them.
+- A Vulkan 1.1 device without dynamic rendering already uses render-pass/framebuffer objects. Do not mistake `render_pass_objects=0` for dynamic rendering being active.
+- The Mali barrier option narrows destination stages for image transitions; it is experimental and should be isolated when investigating crashes.
+
+A source change is not considered a performance improvement until repeatable on-device measurements show better frame pacing without new crashes, flicker, missing effects, or corrupted rendering.
