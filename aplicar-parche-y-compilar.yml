@@ -84,6 +84,40 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      # Comprueba que los cambios de cada parche estan de verdad en el codigo que se va a compilar.
+      - name: Comprobar que los cambios estan en el codigo
+        run: |
+          MENU=android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
+          if [ -f texture_quality_slider.patch ]; then
+            grep -q 'private void textureQuality()' "$MENU" || { echo "FALTA el deslizador de texturas en el codigo"; exit 1; }
+            echo "OK: deslizador de calidad de texturas presente"
+          fi
+          if [ -f lighting_off.patch ]; then
+            grep -q '"lighting_off"' "$MENU" || { echo "FALTA el boton de sombras en el codigo"; exit 1; }
+            echo "OK: boton Sin sombras ni efectos de luz presente"
+          fi
+
+      # El numero de version sale del contador de ESTE workflow (empieza en 1), asi que Android podria rechazar el APK
+      # como "version anterior" si ya tenias instalado otro de mayor numero. Se usa la hora (minutos) para que siempre sea
+      # la mas alta, y el nombre de version lleva "-parches" para reconocer este APK en Ajustes > Apps.
+      - name: Numero de version (siempre mayor)
+        run: |
+          python3 - <<'PY'
+          import time
+          p = 'android/app/build.gradle'
+          s = open(p).read()
+          n = int(time.time() // 60)
+          a = "versionCode((System.getenv('GITHUB_RUN_NUMBER') ?: '1') as int)"
+          b = 'versionName "0.1.${System.getenv(\'GITHUB_RUN_NUMBER\') ?: \'0\'}"'
+          assert a in s, "no encuentro versionCode en build.gradle"
+          s = s.replace(a, "versionCode(%d)" % n)
+          if b in s:
+              s = s.replace(b, b[:-1] + '-parches"')
+          open(p, 'w').write(s)
+          print("versionCode =", n)
+          PY
+          grep -n "versionCode\|versionName" android/app/build.gradle
+
       - name: Build APK
         working-directory: android
         run: gradle assembleDebug --no-daemon --stacktrace
@@ -106,4 +140,4 @@ jobs:
             "dsr-native-${{ github.run_number }}.apk" \
             --target parches-aplicados \
             --title "APK con parches (build ${{ github.run_number }})" \
-            --notes "Compilado automaticamente. Descarga el .apk e instalalo (solo moviles arm64)."
+            --notes "Compilado automaticamente. Descarga el .apk e instalalo (solo moviles arm64). En Ajustes > Apps la version termina en -parches."
