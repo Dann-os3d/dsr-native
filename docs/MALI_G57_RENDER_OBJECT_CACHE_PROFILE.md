@@ -26,6 +26,11 @@ Every normal 10-second backend report may include:
 
 CI verifies compilation and host tests, not Mali GPU performance. These counters are diagnostic only; they do not claim an FPS improvement. PanVK remains experimental on this device based on prior observed flicker and low performance. Keep the system Vulkan driver as the stability reference until device captures demonstrate otherwise.
 
+
+## Small big.LITTLE CPU compiler policy
+
+On Android, the platform layer reports the detected performance-core count from the same CPU-frequency topology used by the affinity policy. If it detects only one or two performance cores, the Vulkan pipeline compiler pool is capped at two workers (never below two); devices with more performance cores and non-Android hosts retain the previous worker-count policy. This avoids creating extra competing workers on Helio G80/G99-class CPUs. It is a CPU scheduling/load reduction, not an FPS claim; verify shader-compilation stalls and frame pacing on-device.
+
 ## Pipeline-cache concurrency safety
 
 The shared Vulkan pipeline cache is accessed by background pipeline compiler threads and by the asynchronous cache-save worker. All calls that access this shared cache are now serialized with one mutex, including the two-step cache-data size/read operation. This follows Vulkan's external-synchronization requirement for host access to a shared pipeline-cache object and prevents compiler/save overlap from racing on the same driver object. Pipeline creation without a cache handle remains unlocked. The trade-off is that cache-backed pipeline creation calls are serialized; stability takes precedence over speculative parallel throughput on the reference Mali/Helio platform.
