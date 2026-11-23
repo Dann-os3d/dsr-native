@@ -81,6 +81,9 @@ struct RuntimeConfig {
     // texture_mip_skip = 1: big BC textures (512x512 and up, with mip levels) are loaded without their most detailed
     // level: half the width and height, ~75% less data to convert, upload and sample; softer up close.
     int texture_mip_skip = 0;
+    // texture_quality = 0..4: additional mip LOD bias for sampled material textures (0 = original).
+    // Applied to non-shadow samplers; higher levels trade distant texture detail for lower sampling bandwidth.
+    int texture_quality = 0;
     // pass_load_skip = 0: render passes always load their targets (by default a pass learned to overwrite a target
     // starts without loading it: vk_backend.cpp, PassCoverage).
     bool pass_load_skip = true;
