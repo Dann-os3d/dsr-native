@@ -420,6 +420,25 @@ static void TestShaderTranslator() {
     CHECK(v.ok);
     CHECK(v.ok && v.info.stage == Stage::Vertex && v.info.input_mask == 0x3 && v.info.output_mask == 0x1);
     CHECK(v.ok && v.spirv.size() > 5 && v.spirv[0] == 0x07230203);
+    auto count_spv_op = [](const std::vector<uint32_t>& words, uint32_t opcode) {
+        size_t count = 0;
+        for (size_t i = 5; i < words.size();) {
+            const uint32_t wc = words[i] >> 16;
+            if (!wc || i + wc > words.size()) return size_t(0);
+            if ((words[i] & 0xFFFFu) == opcode) count++;
+            i += wc;
+        }
+        return count;
+    };
+    // Production modules omit optional OpName records; debug builds can request them without changing semantics.
+    CHECK(v.ok && count_spv_op(v.spirv, 5) == 0);  // OpName
+    TranslateOptions named_options;
+    named_options.emit_debug_names = true;
+    TranslateResult named_v = Translate(vs.data(), vs.size(), named_options);
+    CHECK(named_v.ok && count_spv_op(named_v.spirv, 5) > 0);
+    CHECK(named_v.ok && named_v.info.output_mask == v.info.output_mask &&
+          named_v.info.input_mask == v.info.input_mask);
+    CHECK(named_v.ok && named_v.spirv.size() > v.spirv.size());
 
     // Fragment, shaped like the game's menu shader: handle from the texture table, perspective divide,
     // 2D rgba sample, multiply by the interpolated color, write render target 0.
