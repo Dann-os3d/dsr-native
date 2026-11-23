@@ -4156,23 +4156,49 @@ private:
         // there is lost: rectangular, bin-sized holes (and LRZ-block squares) in smoke, dust and glow that
         // flicker with timing. One memory barrier covers every attachment of the pass.
         {
-            bool hazard = false;
+            bool color_hazard = false;
+            bool depth_hazard = false;
             for (Image* c : colors)
-                if (c && c->attach_unsynced && c->layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) hazard = true;
+                if (c && c->attach_unsynced && c->layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                    color_hazard = true;
             if (depth && depth->attach_unsynced && depth->layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                hazard = true;
-            if (hazard) {
+                depth_hazard = true;
+            if (color_hazard || depth_hazard) {
                 pass_barriers_++;
-                Rec([](VkCommandBuffer cb) {
+                // Tile Turbo narrows this pass-to-pass dependency to the attachment classes that
+                // actually carry a pending write. Keep the original combined graphics dependency
+                // on every other backend and whenever the optimization is disabled.
+                VkAccessFlags src_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                VkAccessFlags dst_access = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                VkPipelineStageFlags stages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                              VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                              VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+                if (mali_tile_turbo_) {
+                    src_access = 0;
+                    dst_access = 0;
+                    stages = 0;
+                    if (color_hazard) {
+                        src_access |= VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                        dst_access |= VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                        stages |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    }
+                    if (depth_hazard) {
+                        src_access |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                        dst_access |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                        stages |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                  VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+                    }
+                }
+                Rec([src_access, dst_access, stages](VkCommandBuffer cb) {
                     VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-                    mb.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                    mb.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                    const VkPipelineStageFlags st = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                                    VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                                                    VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-                    vkCmdPipelineBarrier(cb, st, st, 0, 1, &mb, 0, nullptr, 0, nullptr);
+                    mb.srcAccessMask = src_access;
+                    mb.dstAccessMask = dst_access;
+                    vkCmdPipelineBarrier(cb, stages, stages, 0, 1, &mb, 0, nullptr, 0, nullptr);
                 });
             }
         }
