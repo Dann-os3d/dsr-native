@@ -530,6 +530,7 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
             else if (!strcmp(key, "staging_memory")) cfg->staging_memory = value;
             else if (!strcmp(key, "recorder_copies")) cfg->recorder_copies = v != 0;
             else if (!strcmp(key, "lighter_post_fx")) cfg->lighter_post_fx = v != 0;
+            else if (!strcmp(key, "lighting_lite")) cfg->lighting_lite = v != 0;
             else if (!strcmp(key, "gamma")) {
                 const float g = float(atof(value));
                 cfg->gamma = g >= 0.5f && g <= 3.0f ? g : 1.0f;
