@@ -5692,8 +5692,13 @@ private:
         // 2 threads up to 7 cores, 3 on 8-9, 4 on 10+: phones with many slow cores build new scenery's
         // pipelines sooner (the draws waiting for them are skipped meanwhile).
         const unsigned hw = std::thread::hardware_concurrency();
-        const int count = std::clamp(int(hw / 2) - 1, 2, 4);
-        LOGI(kTag, "%d pipeline compiler threads (%u CPUs)", count, hw);
+        int count = std::clamp(int(hw / 2) - 1, 2, 4);
+        const int fast_cores = dsr::platform::FastCoreCount();
+        // Two fast cores (e.g. Helio G99/G80) cannot benefit from three or four competing compiler workers.
+        // Pipeline-cache access is serialized for Vulkan correctness, so extra workers mostly add scheduling,
+        // stack and wake-up overhead on these small big.LITTLE CPUs. Keep at least two workers for preparation.
+        if (fast_cores > 0 && fast_cores <= 2) count = std::min(count, 2);
+        LOGI(kTag, "%d pipeline compiler threads (%u CPUs, %d detected fast cores)", count, hw, fast_cores);
         for (int i = 0; i < count; i++)
             compilers_.emplace_back([this] {
                 // Every CPU: created by a thread kept on the fast cores, they inherited its pin and, at low
