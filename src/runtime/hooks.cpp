@@ -673,8 +673,16 @@ void InstallGameHooks() {
         }
     }
     if (rt.config.skip_intro) SkipIntroLogos(rt, b);
-    if (rt.config.performance_mode) ApplyPerformanceMode(rt, b);
-    if (rt.config.lighter_post_fx) ApplyLighterPostFx(rt, b);
+    // The experimental preset reuses only engine switches already identified and validated for this build.
+    // It is deliberately not described as full lighting/shadow shutdown: shadow rendering remains active.
+    if (rt.config.lighting_lite) {
+        LOGI("hooks", "lighting_lite: applying verified reduced-effects preset");
+        ApplyPerformanceMode(rt, b);
+        ApplyLighterPostFx(rt, b);
+    } else {
+        if (rt.config.performance_mode) ApplyPerformanceMode(rt, b);
+        if (rt.config.lighter_post_fx) ApplyLighterPostFx(rt, b);
+    }
     {
         constexpr uint32_t kAdd2MiB = 0x11480108;  // add w8, w8, #0x200, lsl #12
         constexpr uint32_t kAdd8MiB = 0x11600108;  // add w8, w8, #0x800, lsl #12
