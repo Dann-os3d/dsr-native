@@ -121,6 +121,7 @@ struct PatternTable {
     // First-byte buckets avoid testing every Maxwell opcode pattern for every instruction.
     // Entries remain in specificity order, preserving the original first-match semantics.
     std::array<std::vector<uint16_t>, 256> buckets;
+    std::array<Decoded, 65536> decoded{};
     PatternTable() {
         for (const Pattern& p : kPatterns) {
             Entry e{0, 0, 0, p.op, p.form};
@@ -144,13 +145,21 @@ struct PatternTable {
             }
         }
     }
-    Decoded Decode(uint64_t inst) const {
-        const uint16_t top = uint16_t(inst >> 48);
-        for (uint16_t i : buckets[uint8_t(top >> 8)]) {
-            const Entry& e = entries[i];
-            if ((top & e.mask) == e.value) return {e.op, e.form};
+        // Resolve all 16-bit opcode prefixes once. Shader translation then needs one indexed
+        // lookup per instruction instead of walking the candidate patterns in the first-byte bucket.
+        // The fill order is exactly the bucket order above, preserving first-match decode semantics.
+        for (uint32_t top = 0; top < decoded.size(); ++top) {
+            for (uint16_t i : buckets[top >> 8]) {
+                const Entry& e = entries[i];
+                if ((uint16_t(top) & e.mask) == e.value) {
+                    decoded[top] = {e.op, e.form};
+                    break;
+                }
+            }
         }
-        return {};
+    }
+    Decoded Decode(uint64_t inst) const {
+        return decoded[uint16_t(inst >> 48)];
     }
 };
 const PatternTable& Patterns() {
