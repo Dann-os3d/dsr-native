@@ -1603,6 +1603,13 @@ private:
             end_rendering_ = reinterpret_cast<PFN_vkCmdEndRendering>(vkGetDeviceProcAddr(device_, "vkCmdEndRendering"));
         }
         mali_barriers_ = dsr::GetRuntime().config.mali_barriers;
+        // Tile Turbo is deliberately opt-in and Mali-only. Other vendors keep the existing synchronization path.
+        mali_tile_turbo_ = dsr::GetRuntime().config.mali_tile_turbo &&
+                           (props_.vendorID == 0x13B5 || strstr(props_.deviceName, "Mali") != nullptr);
+        if (dsr::GetRuntime().config.mali_tile_turbo && !mali_tile_turbo_)
+            LOGW(kTag, "Mali Tile Turbo requested but this is not a recognized Mali device; conservative barriers remain active");
+        if (mali_tile_turbo_)
+            LOGI(kTag, "Mali Tile Turbo enabled: layout-derived stage/access scopes; unknown layouts use conservative barriers");
         if (mali_barriers_)
             LOGI(kTag, "settings mali_barriers = 1: narrow layout barriers, render targets readable when their pass ends");
         if (!begin_rendering_ || !end_rendering_) {
@@ -3517,23 +3524,79 @@ private:
             default: return VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
         }
     }
-    bool mali_barriers_ = false;  // settings mali_barriers
+    bool mali_barriers_ = false;  // legacy settings mali_barriers
+    bool mali_tile_turbo_ = false;  // opt-in, Mali-only, layout-scoped synchronization
     uint64_t vertex_read_barriers_ = 0;
+    uint64_t tile_turbo_barriers_ = 0, tile_turbo_fallbacks_ = 0;
+
+    // Return a narrowly scoped stage/access pair only when the Vulkan image layout identifies the access.
+    // GENERAL and unknown layouts intentionally fall back to the conservative barrier.
+    static bool LayoutScope(VkImageLayout layout, bool source, VkPipelineStageFlags* stages, VkAccessFlags* access) {
+        switch (layout) {
+            case VK_IMAGE_LAYOUT_UNDEFINED:
+                if (!source) return false;
+                *stages = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+                *access = 0;
+                return true;
+            case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+                *stages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+                *access = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                return true;
+            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+                *stages = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+                *access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                return true;
+            case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+                *stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                *access = VK_ACCESS_TRANSFER_READ_BIT;
+                return true;
+            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+                *stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                *access = VK_ACCESS_TRANSFER_WRITE_BIT;
+                return true;
+            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+                *stages = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+                *access = VK_ACCESS_SHADER_READ_BIT;
+                return true;
+            default:
+                return false;
+        }
+    }
     void RawBarrier(VkImage image, VkImageAspectFlags aspect, VkImageLayout from, VkImageLayout to,
                     uint32_t levels = 1, uint32_t layers = 1) {
         barriers_++;
-        const VkPipelineStageFlags dst_stages = mali_barriers_ ? StagesUsing(to) : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        VkPipelineStageFlags src_stages = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        VkPipelineStageFlags dst_stages = mali_barriers_ ? StagesUsing(to) : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        VkAccessFlags src_access = VK_ACCESS_MEMORY_WRITE_BIT;
+        VkAccessFlags dst_access = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        if (mali_tile_turbo_) {
+            VkPipelineStageFlags scoped_src = 0, scoped_dst = 0;
+            VkAccessFlags scoped_src_access = 0, scoped_dst_access = 0;
+            if (LayoutScope(from, true, &scoped_src, &scoped_src_access) &&
+                LayoutScope(to, false, &scoped_dst, &scoped_dst_access)) {
+                src_stages = scoped_src;
+                dst_stages = scoped_dst;
+                src_access = scoped_src_access;
+                dst_access = scoped_dst_access;
+                tile_turbo_barriers_++;
+            } else {
+                // Unknown layout or access: retain the original broad memory dependency.
+                dst_stages = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+                tile_turbo_fallbacks_++;
+            }
+        }
         VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        b.srcAccessMask = src_access;
+        b.dstAccessMask = dst_access;
         b.oldLayout = from;
         b.newLayout = to;
         b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.image = image;
         b.subresourceRange = {aspect, 0, levels, 0, layers};
-        Rec([b, dst_stages](VkCommandBuffer cb) {
-            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, dst_stages, 0, 0, nullptr, 0, nullptr, 1, &b);
+        Rec([b, src_stages, dst_stages](VkCommandBuffer cb) {
+            vkCmdPipelineBarrier(cb, src_stages, dst_stages, 0, 0, nullptr, 0, nullptr, 1, &b);
         });
     }
     void Transition(Image& img, VkImageLayout to) {
@@ -6432,9 +6495,11 @@ private:
                 for (uint64_t& c : video_cadence_) c = 0;
             }
         }
-        LOGI(kTag, "last 10 s: %llu render passes started, %llu image barriers (%llu for vertex-shader reads of render targets)",
-             (unsigned long long)render_passes_, (unsigned long long)barriers_, (unsigned long long)vertex_read_barriers_);
+        LOGI(kTag, "last 10 s: %llu render passes, %llu image barriers (%llu vertex-read); Mali Tile Turbo scoped %llu, conservative fallbacks %llu",
+             (unsigned long long)render_passes_, (unsigned long long)barriers_, (unsigned long long)vertex_read_barriers_,
+             (unsigned long long)tile_turbo_barriers_, (unsigned long long)tile_turbo_fallbacks_);
         vertex_read_barriers_ = 0;
+        tile_turbo_barriers_ = tile_turbo_fallbacks_ = 0;
         render_passes_ = barriers_ = 0;
         size_t rp_size = 0, fb_size = 0;
         {
