@@ -12,6 +12,7 @@
 #include "hle/nvn/shader/translator.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <map>
 
@@ -117,6 +118,9 @@ struct PatternTable {
         Form form;
     };
     std::vector<Entry> entries;
+    // First-byte buckets avoid testing every Maxwell opcode pattern for every instruction.
+    // Entries remain in specificity order, preserving the original first-match semantics.
+    std::array<std::vector<uint16_t>, 256> buckets;
     PatternTable() {
         for (const Pattern& p : kPatterns) {
             Entry e{0, 0, 0, p.op, p.form};
@@ -132,11 +136,20 @@ struct PatternTable {
         }
         std::stable_sort(entries.begin(), entries.end(),
                          [](const Entry& a, const Entry& b) { return a.specificity > b.specificity; });
+        for (uint16_t hi = 0; hi < buckets.size(); ++hi) {
+            for (uint16_t i = 0; i < entries.size(); ++i) {
+                const Entry& e = entries[i];
+                const uint8_t mask = uint8_t(e.mask >> 8);
+                if ((uint8_t(hi) & mask) == uint8_t(e.value >> 8)) buckets[hi].push_back(i);
+            }
+        }
     }
     Decoded Decode(uint64_t inst) const {
-        uint16_t top = uint16_t(inst >> 48);
-        for (const Entry& e : entries)
+        const uint16_t top = uint16_t(inst >> 48);
+        for (uint16_t i : buckets[uint8_t(top >> 8)]) {
+            const Entry& e = entries[i];
             if ((top & e.mask) == e.value) return {e.op, e.form};
+        }
         return {};
     }
 };
