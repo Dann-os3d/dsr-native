@@ -41,6 +41,7 @@ struct TranslateOptions {
     int depth_test_func = 0;
     bool debug_outputs = false;
     uint32_t debug_slot = 2;
+    bool emit_debug_names = false;  // keep production SPIR-V lean; enable when inspecting translated modules
 };                                    // block offset 0 (fragment stage)
 
 struct ShaderInfo {
