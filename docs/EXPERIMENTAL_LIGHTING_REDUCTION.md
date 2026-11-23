@@ -10,7 +10,7 @@ This is an experimental optimization, not a guaranteed FPS fix. It must remain o
 
 The game hooks currently expose two separate quality paths:
 
-- `performance_mode`: forces the engine's low-quality VFX path and reduces the shadow-map size from 2048 to 1024.
+- `performance_mode`: forces the engine's low-quality VFX path and reduces the shadow-map size from 2048 to 512.
 - `lighter_post_fx`: disables ambient occlusion, depth of field, camera motion blur and light shafts through checked instruction patches.
 
 These controls do **not** turn off all lighting. In particular, the source audit has not yet identified a verified, safe switch that disables every direct/indirect light contribution or the complete shadow-rendering pass.
@@ -23,7 +23,7 @@ Create a separate experimental setting (do not overload `performance_mode` or `l
 
 1. Keep low-quality VFX enabled.
 2. Disable the already identified post-processing effects.
-3. Reduce shadow-map resolution further only after confirming the engine accepts the target value and updates its shadow target/texel calculations consistently.
+3. Use the engine's documented minimum shadow-map setting (512; its debug-menu range is 512..2048) after confirming the global is initialized to 2048. The renderer derives target dimensions and texel offsets from this value.
 4. Log each applied or skipped patch, including the expected and observed instruction/data values.
 
 The UI wording must say **Reduced lighting** or **Lighting-lite**, not **Lighting off**, until full disablement is proven.
@@ -69,7 +69,7 @@ The branch now includes an opt-in `lighting_lite` setting in the Graphics tab. I
 
 The preset currently means:
 - low-quality VFX path;
-- shadow map size reduced from 2048 to 1024 where the expected game data is present;
+- shadow map size reduced from 2048 to 512 where the expected game data is present;
 - ambient occlusion, depth of field, camera motion blur and light shafts disabled.
 
 This is **not** full lighting shutdown and does not skip the shadow-rendering pass. No APK build or physical-device test has yet been confirmed for this implementation.
@@ -80,3 +80,8 @@ This is **not** full lighting shutdown and does not skip the shadow-rendering pa
 - Test on Mali-G57 MC2, comparing the same exploration and boss scenes with the preset OFF/ON.
 - Inspect frame pacing, GPU busy time, flicker/black frames and visual regressions.
 - Only then research deeper shadow-pass suppression and separate lighting systems.
+
+
+### Stage A2 — minimum documented shadow-map resolution
+
+The Lighting-lite preset now selects 512x512 shadow maps instead of 1024x1024. The game build metadata documents 512..2048 as the supported debug-menu range, and the renderer sizes its shadow target and texel offsets from this global. The patch remains conditional: it writes 512 only when the expected global is inside the mapped main module and currently equals 2048. It does not suppress shadow rendering. The Android build and device behavior for this change still require validation.
