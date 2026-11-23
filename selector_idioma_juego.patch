@@ -1,0 +1,166 @@
+diff --git a/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java b/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
+index 396d337..ac854c8 100644
+--- a/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
++++ b/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
+@@ -1180,6 +1180,78 @@ public final class SettingsMenu {
+             lp.topMargin = dp(6);
+             mBody.addView(row, lp);
+         }
++        gameLanguageSection();
++    }
++
++    // ---- Game language (only the languages this copy of the game has) -----------------------------------------------
++
++    /** Folder / file name fragments (lower case) that name a language in a game copy, and the code they stand for. */
++    private static final String[][] LANGUAGE_MARKS = {{"english", "en-US"}, {"french", "fr"}, {"german", "de"},
++            {"italian", "it"}, {"spanish", "es"}, {"portuguese", "pt"}, {"russian", "ru"}, {"japanese", "ja"},
++            {"korean", "ko"}, {"schinese", "zh-CN"}, {"simplifiedchinese", "zh-CN"}, {"tchinese", "zh-TW"},
++            {"traditionalchinese", "zh-TW"}};
++
++    /**
++     * The language codes (Strings.CODES) that the game copy in `root` carries, judged by folder and file names (up to
++     * 3 levels, not inside exefs). Empty when the copy does not say (its texts are inside the dvdbnd archives).
++     */
++    static java.util.Set<String> gameCopyLanguages(String root) {
++        java.util.Set<String> found = new java.util.HashSet<>();
++        if (root != null && !root.isEmpty()) scanLanguages(new File(root), 0, found, new int[] {5000});
++        return found;
++    }
++
++    private static void scanLanguages(File dir, int depth, java.util.Set<String> found, int[] budget) {
++        String[] names = dir.list();
++        if (names == null) return;
++        for (String n : names) {
++            if (budget[0]-- <= 0) return;
++            String low = n.toLowerCase(java.util.Locale.ROOT);
++            for (String[] mark : LANGUAGE_MARKS)
++                if (low.contains(mark[0])) found.add(mark[1]);
++            if (depth < 3 && !low.equals("exefs")) {
++                File f = new File(dir, n);
++                if (f.isDirectory()) scanLanguages(f, depth + 1, found, budget);
++            }
++        }
++    }
++
++    private void gameLanguageSection() {
++        section(Strings.t("sec_glang"));
++        java.util.Set<String> found = gameCopyLanguages(sGameDir);
++        final boolean filtered = !found.isEmpty();
++        android.util.Log.i("DSRNative", "game language selector: " + (filtered ? "copy has " + found : "copy does not list its languages")
++                + " (folder " + sGameDir + ")");
++        note(Strings.t(filtered ? "glang_found" : "glang_all"));
++        String cur = mValues.containsKey("game_language") ? mValues.get("game_language") : "auto";
++        if (cur == null || cur.isEmpty()) cur = "auto";
++        gameLanguageRow(Strings.t("glang_same"), "auto", cur.equalsIgnoreCase("auto"));
++        for (int i = 0; i < Strings.CODES.length; i++) {
++            String code = Strings.CODES[i];
++            boolean chosen = code.equalsIgnoreCase(cur);
++            if (filtered && !found.contains(code) && !chosen) continue;  // the copy does not have it
++            gameLanguageRow(Strings.NAMES[i], code, chosen);
++        }
++    }
++
++    private void gameLanguageRow(String label, final String code, boolean selected) {
++        final TextView row = chip(label, false);
++        row.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
++        row.setSelected(selected);
++        row.setOnClickListener(v -> {
++            if (row.isSelected()) return;
++            if (!writeSetting("game_language", code)) {
++                cantSave();
++                return;
++            }
++            mValues.put("game_language", code);
++            showTab(TAB_LANGUAGE);
++            popup(Strings.t("sec_glang"), Strings.t("lang_changed"));
++        });
++        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
++                ViewGroup.LayoutParams.WRAP_CONTENT);
++        lp.topMargin = dp(6);
++        mBody.addView(row, lp);
+     }
+ 
+     private void chooseGameFolder(Uri uri) {
+diff --git a/android/app/src/main/java/com/dsrnative/app/Strings.java b/android/app/src/main/java/com/dsrnative/app/Strings.java
+index 21c7fa1..b4bf811 100644
+--- a/android/app/src/main/java/com/dsrnative/app/Strings.java
++++ b/android/app/src/main/java/com/dsrnative/app/Strings.java
+@@ -905,6 +905,36 @@ final class Strings {
+         put("cancel", "Cancel", "Annuler", "Abbrechen", "Annulla", "Cancelar", "Cancelar", "Отмена", "キャンセル", "취소",
+                 "取消", "取消");
+ 
++        // ---- Game language selector (Language tab)
++        put("sec_glang", "Game language", "Langue du jeu", "Spielsprache", "Lingua del gioco", "Idioma del juego",
++                "Idioma do jogo", "Язык игры", "ゲームの言語", "게임 언어", "游戏语言", "遊戲語言");
++        put("glang_same", "Same as the menu", "Comme le menu", "Wie das Menü", "Come il menu", "Igual que el menú",
++                "Igual ao menu", "Как в меню", "メニューと同じ", "메뉴와 동일", "与菜单相同", "與選單相同");
++        put("glang_found",
++                "The languages found in your copy of the game. Changes the game only, at its next start.",
++                "Les langues trouvées dans votre copie du jeu. Ne change que le jeu, au prochain lancement.",
++                "Die Sprachen, die in deiner Kopie des Spiels gefunden wurden. Ändert nur das Spiel, beim nächsten Start.",
++                "Le lingue trovate nella tua copia del gioco. Cambia solo il gioco, al prossimo avvio.",
++                "Los idiomas que tiene tu copia del juego. Solo cambia el juego, en el próximo inicio.",
++                "Os idiomas encontrados na sua cópia do jogo. Muda apenas o jogo, no próximo início.",
++                "Языки, найденные в вашей копии игры. Меняется только игра, при следующем запуске.",
++                "お使いのゲームのコピーに含まれる言語です。ゲームのみが変わり、次回の起動時に反映されます。",
++                "게임 사본에서 찾은 언어입니다. 게임만 바뀌며 다음 시작 때 적용됩니다.",
++                "在你的游戏副本中找到的语言。只会更改游戏，下次启动时生效。",
++                "在你的遊戲副本中找到的語言。只會更改遊戲，下次啟動時生效。");
++        put("glang_all",
++                "This copy does not list its languages (the game\u2019s texts are inside its archives), so every language of the Switch version is shown. A language the game does not include falls back to English. Changes the game only, at its next start.",
++                "Cette copie n\u2019indique pas ses langues (les textes du jeu sont dans ses archives) : toutes les langues de la version Switch sont proposées. Une langue absente du jeu repasse en anglais. Ne change que le jeu, au prochain lancement.",
++                "Diese Kopie zeigt ihre Sprachen nicht an (die Texte des Spiels liegen in seinen Archiven), daher werden alle Sprachen der Switch-Version angezeigt. Eine Sprache, die das Spiel nicht enthält, fällt auf Englisch zurück. Ändert nur das Spiel, beim nächsten Start.",
++                "Questa copia non indica le sue lingue (i testi del gioco sono negli archivi), quindi sono mostrate tutte le lingue della versione Switch. Una lingua non inclusa nel gioco torna all\u2019inglese. Cambia solo il gioco, al prossimo avvio.",
++                "Esta copia no indica sus idiomas (los textos del juego están dentro de sus archivos), así que se muestran todos los de la versión de Switch. Un idioma que el juego no incluya vuelve al inglés. Solo cambia el juego, en el próximo inicio.",
++                "Esta cópia não indica seus idiomas (os textos do jogo estão dentro dos arquivos), então todos os idiomas da versão Switch são mostrados. Um idioma que o jogo não inclui volta para o inglês. Muda apenas o jogo, no próximo início.",
++                "Эта копия не показывает свои языки (тексты игры лежат внутри архивов), поэтому показаны все языки версии для Switch. Язык, которого нет в игре, заменяется английским. Меняется только игра, при следующем запуске.",
++                "このコピーは言語の一覧を示さない（テキストはアーカイブ内にある）ため、Switch版のすべての言語を表示します。ゲームに含まれない言語は英語になります。ゲームのみが変わり、次回の起動時に反映されます。",
++                "이 사본은 언어 목록을 알려주지 않으므로(텍스트가 아카이브 안에 있음) Switch 버전의 모든 언어를 표시합니다. 게임에 없는 언어는 영어로 대체됩니다. 게임만 바뀌며 다음 시작 때 적용됩니다.",
++                "此副本不显示其语言（游戏文本在压缩包内），因此列出 Switch 版的所有语言。游戏中没有的语言会回退为英语。只会更改游戏，下次启动时生效。",
++                "此副本不顯示其語言（遊戲文字在封存檔內），因此列出 Switch 版的所有語言。遊戲中沒有的語言會退回英文。只會更改遊戲，下次啟動時生效。");
++
+         // ---- Language tab
+         put("lang_n", "The game's text and this menu. The menu changes at once; the game at its next start.",
+                 "Les textes du jeu et ce menu. Le menu change immédiatement ; le jeu au prochain lancement.",
+diff --git a/src/platform/android/android_main.cpp b/src/platform/android/android_main.cpp
+index cf0dc7a..fd0f8c0 100644
+--- a/src/platform/android/android_main.cpp
++++ b/src/platform/android/android_main.cpp
+@@ -443,6 +443,7 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
+         bool have_present_mode = false, have_face_buttons = false, have_gpu_driver = false, have_bc_enabler = false;
+         bool have_touch = false, have_aspect = false;
+         int settings_version = 1;
++        std::string game_language;  // settings game_language: the game's language when it differs from the menu's
+         char line[256];
+         while (fgets(line, sizeof(line), f)) {
+             char key[64], value[64];
+@@ -481,6 +482,7 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
+                 if (known) cfg->language = value;
+                 else LOGW(kTag, "settings: unknown language '%s': using %s", value, cfg->language.c_str());
+             }
++            else if (!strcmp(key, "game_language")) game_language = value;
+             else if (!strcmp(key, "bc_etc2")) cfg->bc_etc2 = v != 0;
+             else if (!strcmp(key, "bc3_etc2")) cfg->bc3_etc2 = v != 0;
+             else if (!strcmp(key, "aspect_ratio")) {
+@@ -540,6 +542,21 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
+             }
+         }
+         fclose(f);
++        // game_language (settings menu, Language tab) wins over `language` for what the game is told; "auto" or a
++        // missing line = the same language as the menu.
++        if (!game_language.empty() && game_language != "auto") {
++            static const char* const kGameLanguages[] = {"en-US", "fr", "de", "it", "es", "pt", "ru", "ja", "ko",
++                                                         "zh-CN", "zh-TW", "en-GB", "fr-CA", "es-419"};
++            bool known = false;
++            for (const char* code : kGameLanguages) known = known || game_language == code;
++            if (known) {
++                cfg->language = game_language;
++                LOGI(kTag, "settings: game_language %s (the menu's language setting is not used for the game)",
++                     game_language.c_str());
++            } else {
++                LOGW(kTag, "settings: unknown game_language '%s': using %s", game_language.c_str(), cfg->language.c_str());
++            }
++        }
+         // Version 2: the presentation default changed from mailbox to fifo. Files from before carry the old default
+         // (written by the app), so `present_mode = mailbox` there becomes fifo, once; a choice made later is kept.
+         if (settings_version < 2) {
