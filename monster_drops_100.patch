@@ -1,0 +1,339 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2f18278..523f149 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -33,6 +33,14 @@ endif()
+ 
+ add_library(dsrcore OBJECT ${DSR_CORE_SOURCES})
+ target_include_directories(dsrcore PUBLIC src third_party/spirv)
++if(NOT ANDROID)
++    # enemy_drops_100 (hle/gameparam_drops.cpp) inflates / deflates GameParam. The Android target links z itself;
++    # without zlib on the host the patch reports "built without zlib" and everything else builds as before.
++    find_package(ZLIB QUIET)
++    if(ZLIB_FOUND)
++        target_link_libraries(dsrcore PUBLIC ZLIB::ZLIB)
++    endif()
++endif()
+ target_compile_options(dsrcore PRIVATE
+     -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wno-cast-function-type
+     $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
+diff --git a/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java b/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
+index 396d337..3fe1cf1 100644
+--- a/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
++++ b/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
+@@ -892,6 +892,10 @@ public final class SettingsMenu {
+     }
+ 
+     private void buildCheatsTab() {
++        // Read at start-up (the game loads its parameters once): works without the game running, unlike the cheat list.
++        section(Strings.t("sec_drops"));
++        toggle("enemy_drops_100", Strings.t("drops_t"), Strings.t("drops_n") + " " + Strings.t("changes_next"), "1", "0",
++                "0");
+         section(Strings.t("sec_cheats"));
+         String list;
+         try {
+diff --git a/android/app/src/main/java/com/dsrnative/app/Strings.java b/android/app/src/main/java/com/dsrnative/app/Strings.java
+index 21c7fa1..bda50ec 100644
+--- a/android/app/src/main/java/com/dsrnative/app/Strings.java
++++ b/android/app/src/main/java/com/dsrnative/app/Strings.java
+@@ -613,6 +613,23 @@ final class Strings {
+                 "치트",
+                 "作弊码",
+                 "作弊碼");
++        put("sec_drops", "Enemy drops", "Butin des ennemis", "Gegner-Beute", "Bottino dei nemici", "Botín de enemigos",
++                "Itens dos inimigos", "Добыча с врагов", "敵のドロップ", "적 드롭", "敌人掉落", "敵人掉落");
++        put("drops_t", "100% enemy drops", "Butin des ennemis à 100 %", "100 % Gegner-Beute", "Bottino dei nemici al 100%",
++                "100 % de drops de enemigos", "100% de itens dos inimigos", "100% добыча с врагов", "敵のドロップ率100%",
++                "적 드롭 100%", "敌人100%掉落", "敵人100%掉落");
++        put("drops_n",
++                "Every item in an enemy\u2019s drop table always drops (also in treasure and boss lots), instead of being left to chance. Only the game\u2019s parameters are changed in memory while it loads: your save and the game files stay as they are, and turning this off brings the normal drops back. Can unbalance the game. See the log for \u201cenemy_drops_100\u201d if nothing changes.",
++                "Chaque objet de la table de butin d\u2019un ennemi est toujours lâché (aussi dans les coffres et les boss), au lieu de dépendre du hasard. Seuls les paramètres du jeu sont modifiés en mémoire au chargement : la sauvegarde et les fichiers du jeu ne changent pas, et la désactivation rétablit le butin normal. Peut déséquilibrer le jeu. Si rien ne change, cherchez \u00ab enemy_drops_100 \u00bb dans le journal.",
++                "Jeder Gegenstand in der Beutetabelle eines Gegners wird immer fallen gelassen (auch bei Schätzen und Bossen), statt vom Zufall abzuhängen. Nur die Spielparameter werden beim Laden im Speicher geändert: Spielstand und Spieldateien bleiben unverändert, und beim Ausschalten kommt die normale Beute zurück. Kann das Spiel aus dem Gleichgewicht bringen. Ändert sich nichts, such im Protokoll nach \u201eenemy_drops_100\u201c.",
++                "Ogni oggetto nella tabella di bottino di un nemico viene sempre rilasciato (anche nei tesori e nei boss), invece di dipendere dal caso. Solo i parametri del gioco vengono modificati in memoria durante il caricamento: salvataggio e file di gioco restano invariati e, disattivando, torna il bottino normale. Può sbilanciare il gioco. Se non cambia nulla, cerca \u00ab enemy_drops_100 \u00bb nel log.",
++                "Todos los objetos de la tabla de drops de un enemigo se sueltan siempre (también en tesoros y jefes), en lugar de depender del azar. Solo se cambian en memoria los parámetros del juego al cargarlo: tu partida y los archivos del juego no se tocan, y al desactivarlo vuelven los drops normales. Puede desequilibrar el juego. Si no cambia nada, busca \u00abenemy_drops_100\u00bb en el registro.",
++                "Todos os itens da tabela de itens de um inimigo sempre são largados (também em tesouros e chefes), em vez de dependerem do acaso. Apenas os parâmetros do jogo são alterados na memória ao carregar: o seu save e os arquivos do jogo ficam como estão, e ao desativar voltam os itens normais. Pode desequilibrar o jogo. Se nada mudar, procure \u201cenemy_drops_100\u201d no registro.",
++                "Каждый предмет из таблицы добычи врага всегда выпадает (также из сокровищ и боссов), а не по воле случая. При загрузке меняются только параметры игры в памяти: сохранение и файлы игры остаются прежними, а при выключении возвращается обычная добыча. Может нарушить баланс игры. Если ничего не изменилось, поищите \u00abenemy_drops_100\u00bb в журнале.",
++                "敵のドロップテーブルにあるアイテムが、運に左右されず必ずドロップします（宝箱やボスも対象）。読み込み時にメモリ上のゲームパラメータだけを変更するため、セーブデータやゲームファイルは変わらず、オフにすると通常のドロップに戻ります。ゲームバランスが崩れる場合があります。変化がない場合はログの「enemy_drops_100」を確認してください。",
++                "적의 드롭 테이블에 있는 모든 아이템이 확률 없이 항상 드롭됩니다(보물과 보스 포함). 로딩할 때 메모리에서 게임 파라미터만 바꾸므로 세이브와 게임 파일은 그대로이며, 끄면 원래 드롭으로 돌아갑니다. 게임 밸런스가 무너질 수 있습니다. 변화가 없으면 로그에서 \u201cenemy_drops_100\u201d을 확인하세요.",
++                "敌人掉落表中的每件物品都会必定掉落（宝箱和首领也一样），不再依赖运气。加载时只在内存中修改游戏参数：存档和游戏文件保持不变，关闭后恢复正常掉落。可能破坏游戏平衡。如果没有变化，请在日志中查找“enemy_drops_100”。",
++                "敵人掉落表中的每件物品都會必定掉落（寶箱與首領也一樣），不再依賴運氣。載入時只在記憶體中修改遊戲參數：存檔與遊戲檔案維持不變，關閉後恢復正常掉落。可能破壞遊戲平衡。若沒有變化，請在日誌中搜尋「enemy_drops_100」。");
+         put("sec_cheats",
+                 "Cheats",
+                 "Codes de triche",
+diff --git a/src/hle/fs.cpp b/src/hle/fs.cpp
+index 547349f..13e640b 100644
+--- a/src/hle/fs.cpp
++++ b/src/hle/fs.cpp
+@@ -14,6 +14,7 @@
+ #include <vector>
+ 
+ #include "common/log.h"
++#include "hle/gameparam_drops.h"
+ #include "hle/registry.h"
+ #include "runtime/runtime.h"
+ 
+@@ -166,6 +167,32 @@ HLE_FUNC(_ZN2nn2fs9CloseFileENS0_10FileHandleE, void, fs_CloseFile, (HostFile *
+     close(f->fd);
+     delete f;
+ }
++// enemy_drops_100: the game reads GameParam.parambnd.dcx from a dvdbnd*.bdt in one read; ItemLotParam is changed in
++// that buffer. Only a DCX read from a .bdt whose first bytes match is looked at, so other reads cost one compare.
++static void MaybePatchDrops(const HostFile* f, uint8_t* buf, size_t size) {
++    if (buf[1] != 'C' || buf[2] != 'X' || buf[3] != 0) return;
++    const size_t slash = f->path.rfind('/');
++    const char* name = f->path.c_str() + (slash == std::string::npos ? 0 : slash + 1);
++    if (strncmp(name, "dvdbnd", 6) != 0) return;
++    static bool logged_ok = false, logged_fail = false;
++    size_t slots = 0;
++    const char* why = "";
++    switch (dsr::hle::PatchGameParamDrops(buf, size, &slots, &why)) {
++        case dsr::hle::DropPatch::Patched:
++            if (!logged_ok) LOGI(kTag, "enemy_drops_100: GameParam patched, %zu item slots now drop 100%%", slots);
++            logged_ok = true;
++            break;
++        case dsr::hle::DropPatch::AlreadyFull:
++            if (!logged_ok) LOGI(kTag, "enemy_drops_100: GameParam already has 100%% drops (%zu item slots)", slots);
++            logged_ok = true;
++            break;
++        case dsr::hle::DropPatch::Failed:
++            if (!logged_fail) LOGW(kTag, "enemy_drops_100: GameParam NOT patched: %s", why);
++            logged_fail = true;
++            break;
++        case dsr::hle::DropPatch::NotGameParam: break;
++    }
++}
+ static uint32_t ReadImpl(size_t* out, HostFile* f, int64_t off, void* buf, size_t size) {
+     size_t done = 0;
+     while (done < size) {
+@@ -178,6 +205,8 @@ static uint32_t ReadImpl(size_t* out, HostFile* f, int64_t off, void* buf, size_
+         done += size_t(r);
+     }
+     if (out) *out = done;
++    if (done == size && size > 0x4C && static_cast<const char*>(buf)[0] == 'D' && dsr::GetRuntime().config.enemy_drops_100)
++        MaybePatchDrops(f, static_cast<uint8_t*>(buf), size);
+     return kOk;
+ }
+ HLE_FUNC(_ZN2nn2fs8ReadFileENS0_10FileHandleElPvm, uint32_t, fs_ReadFile,
+diff --git a/src/hle/gameparam_drops.cpp b/src/hle/gameparam_drops.cpp
+new file mode 100644
+index 0000000..77af08d
+--- /dev/null
++++ b/src/hle/gameparam_drops.cpp
+@@ -0,0 +1,161 @@
++#include "hle/gameparam_drops.h"
++
++#include <cstring>
++#include <vector>
++
++#if __has_include(<zlib.h>)
++#include <zlib.h>
++#define DSR_HAVE_ZLIB 1
++#endif
++
++namespace dsr::hle {
++namespace {
++
++// DCX (DFLT) header as FromSoftware writes it: "DCX\0", sizes at 0x1C (inflated) and 0x20 (deflated), "DFLT" at
++// 0x28, "DCA\0" at 0x44 and the zlib stream at 0x4C.
++constexpr size_t kDcxHeader = 0x4C;
++constexpr uint32_t kMaxInflated = 64u << 20;
++// ITEMLOT_PARAM_ST: 8 x s32 lotItemId, 8 x s32 lotItemCategory, 8 x u16 lotItemBasePoint, ... 148 bytes per row.
++constexpr size_t kRowSize = 148, kSlots = 8, kBasePointOffset = 64;
++
++uint32_t Be32(const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3]; }
++uint32_t Le32(const uint8_t* p) { return uint32_t(p[3]) << 24 | uint32_t(p[2]) << 16 | uint32_t(p[1]) << 8 | p[0]; }
++uint16_t Le16(const uint8_t* p) { return uint16_t(p[1] << 8 | p[0]); }
++void PutLe16(uint8_t* p, uint16_t v) { p[0] = uint8_t(v); p[1] = uint8_t(v >> 8); }
++
++bool HasName(const uint8_t* d, size_t n, const char* name) {
++    const size_t len = strlen(name);
++    for (size_t i = 0; i + len <= n; i++)
++        if (d[i] == uint8_t(name[0]) && memcmp(d + i, name, len) == 0) return true;
++    return false;
++}
++
++#ifdef DSR_HAVE_ZLIB
++// Inflates up to `cap` bytes of the stream (all of it when it is shorter).
++size_t InflatePrefix(const uint8_t* src, size_t n, uint8_t* dst, size_t cap) {
++    z_stream z;
++    memset(&z, 0, sizeof z);
++    if (inflateInit(&z) != Z_OK) return 0;
++    z.next_in = const_cast<uint8_t*>(src);
++    z.avail_in = uInt(n);
++    z.next_out = dst;
++    z.avail_out = uInt(cap);
++    inflate(&z, Z_SYNC_FLUSH);
++    const size_t got = cap - z.avail_out;
++    inflateEnd(&z);
++    return got;
++}
++
++// The smallest zlib stream (level 9; the memory level changes the size by a few KB either way) of data, or empty.
++std::vector<uint8_t> Deflate(const uint8_t* data, size_t n) {
++    std::vector<uint8_t> best;
++    for (int mem_level : {8, 9, 7}) {
++        z_stream z;
++        memset(&z, 0, sizeof z);
++        if (deflateInit2(&z, 9, Z_DEFLATED, 15, mem_level, Z_DEFAULT_STRATEGY) != Z_OK) continue;
++        std::vector<uint8_t> out(deflateBound(&z, uLong(n)));
++        z.next_in = const_cast<uint8_t*>(data);
++        z.avail_in = uInt(n);
++        z.next_out = out.data();
++        z.avail_out = uInt(out.size());
++        const int r = deflate(&z, Z_FINISH);
++        const size_t used = out.size() - z.avail_out;
++        deflateEnd(&z);
++        if (r == Z_STREAM_END && (best.empty() || used < best.size())) {
++            out.resize(used);
++            best.swap(out);
++        }
++    }
++    return best;
++}
++#endif
++
++}  // namespace
++
++DropPatch PatchGameParamDrops(uint8_t* buf, size_t size, size_t* slots, const char** why) {
++    auto fail = [&](const char* msg) {
++        if (why) *why = msg;
++        return DropPatch::Failed;
++    };
++    if (slots) *slots = 0;
++    if (size < kDcxHeader + 16 || memcmp(buf, "DCX\0", 4) != 0 || memcmp(buf + 0x28, "DFLT", 4) != 0 ||
++        memcmp(buf + 0x44, "DCA\0", 4) != 0)
++        return DropPatch::NotGameParam;
++    const uint32_t inflated = Be32(buf + 0x1C), deflated = Be32(buf + 0x20);
++    if (inflated < 0x100 || inflated > kMaxInflated || deflated == 0 || kDcxHeader + size_t(deflated) > size)
++        return DropPatch::NotGameParam;
++
++#ifndef DSR_HAVE_ZLIB
++    (void)inflated;
++    return fail("built without zlib");
++#else
++    // Cheap test first: the BND3 header and its name table are in the first few KB. Most DCX files are not this one.
++    uint8_t head[4096];
++    const size_t hn = InflatePrefix(buf + kDcxHeader, deflated, head, sizeof head);
++    if (hn < 0x30 || memcmp(head, "BND3", 4) != 0 || !HasName(head, hn, "GameParam\\ItemLotParam.param"))
++        return DropPatch::NotGameParam;
++
++    std::vector<uint8_t> bnd(inflated);
++    if (InflatePrefix(buf + kDcxHeader, deflated, bnd.data(), bnd.size()) != bnd.size()) return fail("inflate failed");
++
++    // BND3 as the game ships it: flags 0x74, little endian, 24-byte entries
++    // { flags, size, offset, id, name offset, inflated size } after a 0x20-byte header.
++    if (bnd[0x0C] != 0x74 || bnd[0x0D] != 0) return fail("unexpected BND3 flags");
++    const uint32_t count = Le32(&bnd[0x10]);
++    if (count == 0 || 0x20 + size_t(count) * 24 > bnd.size()) return fail("bad BND3 entry table");
++    uint8_t* param = nullptr;
++    size_t param_size = 0;
++    for (uint32_t i = 0; i < count && !param; i++) {
++        const uint8_t* e = &bnd[0x20 + size_t(i) * 24];
++        const uint32_t esize = Le32(e + 4), eoff = Le32(e + 8), noff = Le32(e + 16);
++        if (noff >= bnd.size() || size_t(eoff) + esize > bnd.size()) return fail("bad BND3 entry");
++        if (HasName(&bnd[noff], strnlen(reinterpret_cast<const char*>(&bnd[noff]), bnd.size() - noff),
++                    "GameParam\\ItemLotParam.param")) {
++            param = &bnd[eoff];
++            param_size = esize;
++        }
++    }
++    if (!param) return fail("ItemLotParam not found");
++
++    // PARAM: u32 string table offset, u16 first row data offset, u16 -, u16 version, u16 row count,
++    // 32-byte param type name at 0x0C, row table { id, data offset, name offset } at 0x30.
++    if (param_size < 0x30) return fail("short PARAM");
++    const uint32_t strings = Le32(param);
++    const uint32_t first = Le16(param + 4), rows = Le16(param + 10);
++    if (memcmp(param + 0x0C, "ITEMLOT_PARAM_ST", 17) != 0) return fail("not ITEMLOT_PARAM_ST");
++    if (rows == 0 || first != 0x30 + rows * 12u || strings > param_size || strings < first ||
++        size_t(strings - first) != size_t(rows) * kRowSize)
++        return fail("unexpected ItemLotParam row layout");
++
++    size_t with_item = 0, changed = 0;
++    for (uint32_t r = 0; r < rows; r++) {
++        const uint32_t data = Le32(param + 0x30 + size_t(r) * 12 + 4);
++        if (size_t(data) + kRowSize > param_size) return fail("row outside ItemLotParam");
++        uint8_t* row = param + data;
++        for (size_t s = 0; s < kSlots; s++) {
++            const int32_t id = int32_t(Le32(row + s * 4));
++            if (id <= 0) continue;  // empty slot
++            with_item++;
++            uint8_t* bp = row + kBasePointOffset + s * 2;
++            if (Le16(bp) != 100) {
++                PutLe16(bp, 100);
++                changed++;
++            }
++        }
++    }
++    if (slots) *slots = with_item;
++    if (changed == 0) return DropPatch::AlreadyFull;
++
++    // Back into the same space: the game read exactly the original DCX, so the new stream has to fit in it. The
++    // header keeps its sizes; whatever is left after the end of the zlib stream is zero (inflate stops at the end).
++    const std::vector<uint8_t> out = Deflate(bnd.data(), bnd.size());
++    if (out.empty()) return fail("deflate failed");
++    if (out.size() > deflated) return fail("recompressed data does not fit");
++    memcpy(buf + kDcxHeader, out.data(), out.size());
++    memset(buf + kDcxHeader + out.size(), 0, deflated - out.size());
++    if (slots) *slots = changed;
++    return DropPatch::Patched;
++#endif
++}
++
++}  // namespace dsr::hle
+diff --git a/src/hle/gameparam_drops.h b/src/hle/gameparam_drops.h
+new file mode 100644
+index 0000000..a9984db
+--- /dev/null
++++ b/src/hle/gameparam_drops.h
+@@ -0,0 +1,24 @@
++#pragma once
++// enemy_drops_100: every item an enemy (or any other item lot) can drop always drops.
++//
++// The game reads GameParam.parambnd.dcx out of dvdbnd0.bdt in one piece. When the setting is on, fs.cpp hands that
++// buffer to PatchGameParamDrops, which rewrites ItemLotParam in place: every slot that holds an item gets
++// lotItemBasePoint = 100 (the same change the PC "100% drops" mods make to the file). Nothing on disk is touched:
++// turn the setting off and the next start reads the original data again.
++#include <cstddef>
++#include <cstdint>
++
++namespace dsr::hle {
++
++enum class DropPatch {
++    NotGameParam,  // not the GameParam DCX (the buffer is untouched)
++    Patched,       // ItemLotParam rewritten in the buffer
++    AlreadyFull,   // every slot already had 100% (the buffer is untouched)
++    Failed,        // it is the GameParam DCX but could not be patched (buffer untouched); *why says the reason
++};
++
++// `buf` holds a file read from a .bdt, `size` bytes. On Patched / AlreadyFull *slots is the number of slots that
++// changed / that hold an item. `why` (optional) receives a short reason for Failed.
++DropPatch PatchGameParamDrops(uint8_t* buf, size_t size, size_t* slots, const char** why);
++
++}  // namespace dsr::hle
+diff --git a/src/platform/android/android_main.cpp b/src/platform/android/android_main.cpp
+index cf0dc7a..b5568f4 100644
+--- a/src/platform/android/android_main.cpp
++++ b/src/platform/android/android_main.cpp
+@@ -470,6 +470,7 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
+             else if (!strcmp(key, "shadow_compare")) cfg->shadow_compare = std::clamp(v, 0, 3);
+             else if (!strcmp(key, "game_hooks")) cfg->game_hooks = v != 0;
+             else if (!strcmp(key, "skip_intro")) cfg->skip_intro = v != 0;
++            else if (!strcmp(key, "enemy_drops_100")) cfg->enemy_drops_100 = v != 0;
+             else if (!strcmp(key, "render_pass_objects")) cfg->render_pass_objects = v != 0;
+             else if (!strcmp(key, "render_scale")) cfg->render_scale = std::clamp(float(atof(value)), 0.5f, 1.0f);
+             else if (!strcmp(key, "language")) {
+diff --git a/src/runtime/runtime.h b/src/runtime/runtime.h
+index 5a5e092..6cc6d81 100644
+--- a/src/runtime/runtime.h
++++ b/src/runtime/runtime.h
+@@ -106,6 +106,9 @@ struct RuntimeConfig {
+     bool record_thread = true;  // record Vulkan commands on a second thread (draw preparation stays on the render thread)
+     bool pin_render_thread = false;  // keep the render thread on the fastest CPU core(s) (slower on 8 Gen 2: off)
+     float exposure = 1.37f;       // scales the tone-mapping exposure (1.0 = as the game draws it)
++    // enemy_drops_100 = 1: every item an enemy (or any item lot) can drop always drops. Read at start-up: when the game
++    // loads GameParam.parambnd.dcx, ItemLotParam is rewritten in memory (hle/gameparam_drops.h). Nothing on disk changes.
++    bool enemy_drops_100 = false;
+ };
+ 
+ struct Runtime {
