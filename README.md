@@ -45,6 +45,7 @@ I have yet to test later areas in the game so don't expect performance to be ent
 - [x] Experimental different aspect ratio support without stretching game image
 - [x] User-selected game directory
 - [x] Floating GUI (Hold - and + buttons for one full second) with various settings such as FPS cap, aspect ratio, frame presentation, etc..
+- [x] In-game quick settings shortcut (gear button; remains available when touch controls are hidden)
 - [x] Custom driver support
 - [x] Render scale / Graphics options
 - [x] Several language options
