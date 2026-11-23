@@ -2988,6 +2988,14 @@ private:
             ci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
         }
         ci.mipLodBias = s.lod_bias;
+        // A global mip bias lowers the detail selected from every sampled material texture without changing
+        // render resolution or image layouts. Keep shadow samplers untouched: their comparison maps are data.
+        if (!shadow) {
+            static constexpr float kTextureLodBias[5] = {0.0f, 0.5f, 1.0f, 1.5f, 2.0f};
+            const int quality = std::clamp(dsr::GetRuntime().config.texture_quality, 0, 4);
+            const float limit = props_.limits.maxSamplerLodBias;
+            ci.mipLodBias = std::clamp(s.lod_bias + kTextureLodBias[quality], -limit, limit);
+        }
         ci.minLod = std::max(0.0f, s.lod_min);
         ci.maxLod = (s.min_filter <= 1) ? 0.25f : std::max(ci.minLod, std::min(s.lod_max, 16.0f));
         if (filterable && features_.samplerAnisotropy && s.max_anisotropy > 1.0f) {
