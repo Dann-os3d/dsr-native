@@ -1486,6 +1486,9 @@ private:
         LOGI(kTag, "GPU: %s, Vulkan %u.%u.%u, driver 0x%x (%u.%u)", props_.deviceName, VK_VERSION_MAJOR(props_.apiVersion),
              VK_VERSION_MINOR(props_.apiVersion), VK_VERSION_PATCH(props_.apiVersion), props_.driverVersion,
              VK_VERSION_MAJOR(props_.driverVersion), VK_VERSION_MINOR(props_.driverVersion));
+        LOGI(kTag, "GPU identity: vendor 0x%04x, device 0x%04x, type %d, cache UUID %02x%02x%02x%02x",
+             props_.vendorID, props_.deviceID, int(props_.deviceType), props_.pipelineCacheUUID[0],
+             props_.pipelineCacheUUID[1], props_.pipelineCacheUUID[2], props_.pipelineCacheUUID[3]);
         // Qualcomm's Adreno 6xx drivers (512.x before 512.514) do not expose the BC texture formats the GPU
         // supports; BCeNabler (libadrenotools) patches the driver in memory to expose them, which saves the
         // software decoding (and BC6H/BC7 then look right).
@@ -1611,6 +1614,10 @@ private:
             LOGI(kTag, "no dynamic rendering: using render pass objects instead%s",
                  lean_images_ ? "; storage usage only on images written as storage images" : "");
         }
+        LOGI(kTag, "render path: %s; dynamic-rendering feature %d; render_pass_objects setting %d; mali_barriers %d",
+             rp_fallback_ ? "render-pass/framebuffer objects" :
+                 (begin_rendering_ && end_rendering_ ? "dynamic rendering" : "render-pass/framebuffer objects"),
+             int(en13.dynamicRendering), int(dsr::GetRuntime().config.render_pass_objects), int(mali_barriers_));
 
         vkGetDeviceQueue(device_, family_, 0, &queue_);
         VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
