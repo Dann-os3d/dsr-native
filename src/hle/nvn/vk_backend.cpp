@@ -3555,8 +3555,8 @@ private:
                 *access = VK_ACCESS_TRANSFER_WRITE_BIT;
                 return true;
             case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-                *stages = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+                // This backend samples textures from its graphics shaders; it does not dispatch compute work.
+                *stages = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
                 *access = VK_ACCESS_SHADER_READ_BIT;
                 return true;
             default:
