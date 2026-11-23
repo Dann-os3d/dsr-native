@@ -144,7 +144,6 @@ struct PatternTable {
                 if ((uint8_t(hi) & mask) == uint8_t(e.value >> 8)) buckets[hi].push_back(i);
             }
         }
-    }
         // Resolve all 16-bit opcode prefixes once. Shader translation then needs one indexed
         // lookup per instruction instead of walking the candidate patterns in the first-byte bucket.
         // The fill order is exactly the bucket order above, preserving first-match decode semantics.
