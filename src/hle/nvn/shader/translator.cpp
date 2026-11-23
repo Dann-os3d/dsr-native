@@ -185,6 +185,7 @@ public:
         // with one shader and then its fading colour with another, keeping only pixels of equal depth (parts of
         // dying characters vanished). Hence no driver-chosen fusing here, and an invariant gl_Position.
         b_.exact_float = stage_ == Stage::Vertex;
+        b_.emit_debug_names = opt_.emit_debug_names;
         Setup();
         if (stage_ == Stage::Fragment && opt_.depth_test_func) EmitDepthTest();
         const size_t count = (size_ - kCodeOffset) / 8;
