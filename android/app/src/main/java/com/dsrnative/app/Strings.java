@@ -232,17 +232,17 @@ final class Strings {
                 "Modo rendimiento", "Modo desempenho", "Режим производительности", "パフォーマンスモード", "성능 모드",
                 "性能模式", "效能模式");
         put("perf_n",
-                "Lighter effects, lower-resolution shadows and a 75% render scale (the slider below can still be moved).",
-                "Effets plus légers, ombres en basse résolution et échelle de rendu à 75 % (le curseur ci-dessous reste réglable).",
-                "Leichtere Effekte, Schatten in niedrigerer Auflösung und 75 % Renderskalierung (der Regler unten bleibt einstellbar).",
-                "Effetti più leggeri, ombre a risoluzione inferiore e scala di rendering al 75% (il cursore qui sotto resta regolabile).",
-                "Efectos más ligeros, sombras de menor resolución y escala de renderizado al 75 % (el control de abajo se puede seguir moviendo).",
-                "Efeitos mais leves, sombras em resolução menor e escala de renderização em 75% (o controle abaixo ainda pode ser ajustado).",
-                "Облегчённые эффекты, тени в низком разрешении и масштаб рендеринга 75% (ползунок ниже можно менять).",
-                "エフェクトを軽くし、影の解像度を下げ、レンダリング倍率を 75% にします（下のスライダーは自由に調整できます）。",
-                "가벼운 효과, 낮은 해상도의 그림자, 75% 렌더링 배율을 사용합니다 (아래 슬라이더는 계속 조절할 수 있습니다).",
-                "更轻的特效、更低分辨率的阴影和 75% 的渲染比例（下方滑块仍可调节）。",
-                "更輕的特效、更低解析度的陰影和 75% 的繪製比例（下方滑桿仍可調整）。");
+                "Lighter effects, lower-resolution shadows and a 50% render scale (the slider below can still be moved).",
+                "Effets plus légers, ombres en basse résolution et échelle de rendu à 50 % (le curseur ci-dessous reste réglable).",
+                "Leichtere Effekte, Schatten in niedrigerer Auflösung und 50 % Renderskalierung (der Regler unten bleibt einstellbar).",
+                "Effetti più leggeri, ombre a risoluzione inferiore e scala di rendering al 50% (il cursore qui sotto resta regolabile).",
+                "Efectos más ligeros, sombras de menor resolución y escala de renderizado al 50 % (el control de abajo se puede seguir moviendo).",
+                "Efeitos mais leves, sombras em resolução menor e escala de renderização em 50% (o controle abaixo ainda pode ser ajustado).",
+                "Облегчённые эффекты, тени в низком разрешении и масштаб рендеринга 50% (ползунок ниже можно менять).",
+                "エフェクトを軽くし、影の解像度を下げ、レンダリング倍率を 50% にします（下のスライダーは自由に調整できます）。",
+                "가벼운 효과, 낮은 해상도의 그림자, 50% 렌더링 배율을 사용합니다 (아래 슬라이더는 계속 조절할 수 있습니다).",
+                "更轻的特效、更低分辨率的阴影和 50% 的渲染比例（下方滑块仍可调节）。",
+                "更輕的特效、更低解析度的陰影和 50% 的繪製比例（下方滑桿仍可調整）。");
         put("sec_gpu", "GPU options", "Options GPU", "GPU-Optionen", "Opzioni GPU", "Opciones de GPU", "Opções de GPU",
                 "Параметры GPU", "GPU オプション", "GPU 옵션", "GPU 选项", "GPU 選項");
         put("gpu_n", "For GPUs such as Mali that lack the game's texture formats or draw in tiles. Off unless you are testing.",
