@@ -1,13 +1,13 @@
 name: Aplicar parche y compilar APK
 
-# Pon en la RAIZ del repositorio: texture_quality_slider.patch
-# (opcional, solo como respaldo: dsr-native-texture-quality.zip)
-# Se ejecuta solo al subir el parche, o a mano desde Actions > Run workflow.
+# Pon en la RAIZ del repositorio los archivos .patch (texture_quality_slider.patch, lighting_off.patch, ...).
+# Se aplican todos, en este orden: primero texture_quality_slider.patch y despues los demas por nombre.
+# Se ejecuta solo al subir un .patch, o a mano desde Actions > Run workflow.
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'texture_quality_slider.patch'
+      - '*.patch'
 
 permissions:
   contents: write
@@ -18,44 +18,56 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Aplicar el parche
+      - name: Aplicar los parches
         run: |
           set -e
-          PATCH=texture_quality_slider.patch
-          ZIP=dsr-native-texture-quality.zip
-          [ -f "$PATCH" ] || { echo "Falta $PATCH en la raiz del repositorio"; exit 1; }
-          if git apply --check -R "$PATCH" 2>/dev/null; then
-            echo "El parche ya estaba aplicado en este repositorio."
-          elif git apply --check "$PATCH" 2>/dev/null; then
-            git apply "$PATCH"
-            echo "Parche aplicado."
-          elif git apply --check --ignore-whitespace "$PATCH" 2>/dev/null; then
-            git apply --ignore-whitespace "$PATCH"
-            echo "Parche aplicado (ignorando espacios)."
-          elif [ -f "$ZIP" ]; then
-            echo "El parche no encaja; copio los archivos modificados desde el zip."
-            grep '^+++ b/' "$PATCH" | sed 's#^+++ b/##' | cut -f1 > /tmp/archivos.txt
-            mkdir /tmp/z && unzip -q "$ZIP" -d /tmp/z
-            RAIZ=$(ls /tmp/z | head -1)
-            while read -r f; do
-              mkdir -p "$(dirname "$f")"
-              cp "/tmp/z/$RAIZ/$f" "$f"
-              echo "  copiado $f"
-            done < /tmp/archivos.txt
-          else
-            echo "El parche no encaja con este repositorio y no hay zip de respaldo."
-            exit 1
+          shopt -s nullglob
+          ORDEN=()
+          [ -f texture_quality_slider.patch ] && ORDEN+=(texture_quality_slider.patch)
+          for p in *.patch; do
+            [ "$p" = texture_quality_slider.patch ] || ORDEN+=("$p")
+          done
+          [ "${#ORDEN[@]}" -gt 0 ] || { echo "No hay ningun archivo .patch en la raiz del repositorio"; exit 1; }
+          # Si TODOS los parches ya estan en el codigo (p. ej. si fusionaste la rama en main), no hay nada que aplicar.
+          # Se comprueba deshaciendolos en orden inverso sobre una copia temporal.
+          RAIZ="$PWD"
+          rm -rf /tmp/rev && cp -a "$RAIZ" /tmp/rev
+          TODOS=1
+          for ((i=${#ORDEN[@]}-1; i>=0; i--)); do
+            (cd /tmp/rev && git apply -R "$RAIZ/${ORDEN[i]}") 2>/dev/null || { TODOS=0; break; }
+          done
+          rm -rf /tmp/rev
+          if [ "$TODOS" = 1 ]; then
+            echo "Todos los parches ya estaban aplicados en este repositorio."
+            ORDEN=()
           fi
+          for PATCH in "${ORDEN[@]}"; do
+            echo "== $PATCH"
+            if git apply --check -R "$PATCH" 2>/dev/null; then
+              echo "   ya estaba aplicado"
+            elif git apply --check "$PATCH" 2>/dev/null; then
+              git apply "$PATCH"
+              echo "   aplicado"
+            elif git apply --check --ignore-whitespace "$PATCH" 2>/dev/null; then
+              git apply --ignore-whitespace "$PATCH"
+              echo "   aplicado (ignorando espacios)"
+            else
+              echo "   ERROR: no encaja con este repositorio."
+              echo "   Comprueba que subiste TAMBIEN los parches anteriores (lighting_off.patch necesita texture_quality_slider.patch)."
+              git apply --check "$PATCH" || true
+              exit 1
+            fi
+          done
 
-      # Guarda el codigo ya modificado en la rama texture-quality de tu fork.
-      - name: Guardar los cambios en la rama texture-quality
+      # Guarda el codigo ya modificado en la rama parches-aplicados de tu fork.
+      - name: Guardar los cambios en la rama parches-aplicados
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B texture-quality
+          git checkout -B parches-aplicados
           git add -A
-          git commit -m "Add texture quality slider (25-100%)" || echo "Sin cambios nuevos que guardar."
-          git push --force origin texture-quality
+          git commit -m "Aplicar parches (texturas, iluminacion)" || echo "Sin cambios nuevos que guardar."
+          git push --force origin parches-aplicados
 
       - uses: actions/setup-java@v5
         with:
@@ -77,12 +89,12 @@ jobs:
         run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Preparar el APK
-        run: cp android/app/build/outputs/apk/debug/*.apk "dsr-native-texture-quality-${{ github.run_number }}.apk"
+        run: cp android/app/build/outputs/apk/debug/*.apk "dsr-native-${{ github.run_number }}.apk"
 
       - uses: actions/upload-artifact@v4
         with:
           name: dsr-native-apk-${{ github.run_number }}
-          path: dsr-native-texture-quality-${{ github.run_number }}.apk
+          path: dsr-native-${{ github.run_number }}.apk
           if-no-files-found: error
 
       # El APK queda en la seccion Releases del repositorio: se descarga directo desde el movil.
@@ -90,8 +102,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "texture-quality-${{ github.run_number }}" \
-            "dsr-native-texture-quality-${{ github.run_number }}.apk" \
-            --target texture-quality \
-            --title "APK con calidad de texturas (build ${{ github.run_number }})" \
+          gh release create "build-${{ github.run_number }}" \
+            "dsr-native-${{ github.run_number }}.apk" \
+            --target parches-aplicados \
+            --title "APK con parches (build ${{ github.run_number }})" \
             --notes "Compilado automaticamente. Descarga el .apk e instalalo (solo moviles arm64)."

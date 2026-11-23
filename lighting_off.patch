@@ -1,0 +1,246 @@
+diff -ruN a/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java b/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
+--- a/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java	2026-11-23 11:33:55.185901841 +0000
++++ b/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java	2026-11-23 11:33:55.190905651 +0000
+@@ -456,6 +456,7 @@
+                 "0");
+         toggle("lighting_lite", Strings.t("lighting_lite_t"), Strings.t("lighting_lite_n") + " "
+                 + Strings.t("changes_next"), "1", "0", "0");
++        toggle("lighting_off", Strings.t("lo_t"), Strings.t("lo_n") + " " + Strings.t("changes_next"), "1", "0", "0");
+ 
+         section(Strings.t("sec_gpu"));
+         note(Strings.t("gpu_n"));
+diff -ruN a/android/app/src/main/java/com/dsrnative/app/Strings.java b/android/app/src/main/java/com/dsrnative/app/Strings.java
+--- a/android/app/src/main/java/com/dsrnative/app/Strings.java	2026-11-23 11:33:55.185924418 +0000
++++ b/android/app/src/main/java/com/dsrnative/app/Strings.java	2026-11-23 11:33:55.190928344 +0000
+@@ -834,6 +834,23 @@
+                 "저품질 효과, 512px 그림자 맵, 경량 후처리를 함께 적용합니다. 그림자와 기본 조명은 계속 활성화됩니다. 게임을 다시 시작하세요.",
+                 "组合低质量特效、512px 阴影贴图和轻量后期处理。阴影与基础照明仍会启用；画面可能更平。请重启游戏。",
+                 "結合低品質特效、512px 陰影貼圖與輕量後製。陰影與基本光照仍會啟用；畫面可能較平。請重新啟動遊戲。");
++        put("lo_t", "No shadows or light effects (experimental)", "Sans ombres ni effets de lumière (expérimental)",
++                "Keine Schatten und Lichteffekte (experimentell)", "Senza ombre né effetti di luce (sperimentale)",
++                "Sin sombras ni efectos de luz (experimental)", "Sem sombras nem efeitos de luz (experimental)",
++                "Без теней и световых эффектов (экспериментально)", "影・光エフェクトなし（実験的）",
++                "그림자·빛 효과 끄기 (실험적)", "关闭阴影和光效（实验性）", "關閉陰影與光效（實驗性）");
++        put("lo_n",
++                "Shadow maps are not drawn at all and nothing is shadowed. Ambient occlusion, light shafts, depth of field and motion blur are off, and effects use the low-quality path. Objects keep their basic lighting. Much less GPU work, but a flatter image.",
++                "Les cartes d’ombres ne sont plus dessinées et plus rien n’est dans l’ombre. Occlusion ambiante, rayons de lumière, profondeur de champ et flou de mouvement sont désactivés, et les effets passent en basse qualité. Les objets gardent leur éclairage de base. Bien moins de travail pour le GPU, mais une image plus plate.",
++                "Schattenkarten werden gar nicht mehr gezeichnet, nichts liegt im Schatten. Ambient Occlusion, Lichtstrahlen, Tiefenunschärfe und Bewegungsunschärfe sind aus, Effekte laufen in niedriger Qualität. Objekte behalten ihre Grundbeleuchtung. Deutlich weniger GPU-Last, aber ein flacheres Bild.",
++                "Le mappe delle ombre non vengono più disegnate e nulla è in ombra. Occlusione ambientale, raggi di luce, profondità di campo e motion blur sono disattivati e gli effetti usano la qualità bassa. Gli oggetti mantengono l’illuminazione di base. Molto meno lavoro per la GPU, ma immagine più piatta.",
++                "Los mapas de sombras no se dibujan y nada queda en sombra. Se desactivan la oclusión ambiental, los rayos de luz, la profundidad de campo y el desenfoque de movimiento, y los efectos usan la calidad baja. Los objetos conservan su iluminación básica. Mucha menos carga para la GPU, pero una imagen más plana.",
++                "Os mapas de sombras não são desenhados e nada fica na sombra. Oclusão ambiental, raios de luz, profundidade de campo e desfoque de movimento ficam desligados, e os efeitos usam qualidade baixa. Os objetos mantêm a iluminação básica. Muito menos trabalho para a GPU, mas imagem mais plana.",
++                "Карты теней вообще не рисуются, ничто не находится в тени. Затенение окружения, лучи света, глубина резкости и размытие движения отключены, эффекты работают в низком качестве. Объекты сохраняют базовое освещение. Намного меньше нагрузки на GPU, но картинка более плоская.",
++                "シャドウマップを描画せず、影は一切つきません。アンビエントオクルージョン、光線、被写界深度、モーションブラーも無効になり、エフェクトは低品質になります。オブジェクトの基本的な陰影は残ります。GPU の負荷が大きく減りますが、画面は平坦になります。",
++                "그림자 맵을 아예 그리지 않아 어떤 것도 그림자가 지지 않습니다. 앰비언트 오클루전, 빛줄기, 피사계 심도, 모션 블러가 꺼지고 효과는 낮은 품질로 처리됩니다. 오브젝트의 기본 조명은 유지됩니다. GPU 부담이 크게 줄지만 화면은 더 밋밋해집니다.",
++                "完全不绘制阴影贴图，所有物体都不会有阴影。环境光遮蔽、光束、景深和动态模糊被关闭，特效使用低画质。物体保留基础光照。GPU 负担大幅降低，但画面会更平淡。",
++                "完全不繪製陰影貼圖，所有物體都不會有陰影。環境光遮蔽、光束、景深和動態模糊會關閉，特效使用低畫質。物體保留基礎光照。GPU 負擔大幅降低，但畫面會更平淡。");
+         put("post_t",
+                 "Lighter post-processing",
+                 "Post-traitement allégé",
+diff -ruN a/docs/EXPERIMENTAL_LIGHTING_REDUCTION.md b/docs/EXPERIMENTAL_LIGHTING_REDUCTION.md
+--- a/docs/EXPERIMENTAL_LIGHTING_REDUCTION.md	2026-11-23 11:33:55.186349717 +0000
++++ b/docs/EXPERIMENTAL_LIGHTING_REDUCTION.md	2026-11-23 11:33:55.191330928 +0000
+@@ -89,3 +89,14 @@
+ ### Stage B investigation — current limitation
+ 
+ The current hook metadata exposes a validated shadow-map size global and a separate LightShaft draw-group switch, but it does not expose a verified shadow-pass enable flag or a complete list of shadow-pass dependencies. The Vulkan backend source handles generic image transitions and render-pass execution; it does not provide a game-specific semantic switch for the shadow pass. Therefore, disabling shadows by suppressing generic Vulkan passes or guessing another game-code offset would be unsafe and is not being committed. A real Stage B patch requires disassembly of the exact supported game binaries/build IDs and confirmation of the pass mask, resource lifetime, and frame-to-frame shadow target behavior.
++
++
++### Stage B (backend) — `lighting_off`: shadow passes are not drawn
++
++The Vulkan backend can do what the game binary could not be audited for. A shadow map is a depth-only pass (no pixel program, no colour target) into a square, power-of-two depth image of 512..2048 pixels (the engine's `ShadwoMap Size` range; 2048 raw is the 16 MB depth image the backend already sizes for). With `lighting_off = 1` such a pass is dropped in `Draw`, before its render pass starts, and the shadow samplers use `VK_COMPARE_OP_NEVER` (the same result as the `shadow_compare = 3` diagnostic: "lit"), whatever the undrawn map holds. The detection is a pure function (`IsShadowMapPass`, `hle/nvn/shadow_pass.h`) with host tests.
++
++`lighting_off` also applies everything `lighting_lite` does (low-quality effects, 512 shadow maps as a fallback if a pass is not recognised, no ambient occlusion / depth of field / camera motion blur / light shafts).
++
++What it does **not** do: direct, ambient and probe lighting inside the objects' own shaders stay as they are. There is still no verified game-code switch for them, and this feature deliberately adds no unverified offsets.
++
++Validation still needed on a device: that no square depth-only pass other than the shadow map exists (the log prints the size of the first skipped pass: `lighting_off: first shadow map pass skipped (depth image WxH)`; anything other than 2048/1024/512 square is a misdetection), no flicker or black frames, and the FPS difference with the setting OFF/ON. The setting is read at start-up and is OFF by default.
+diff -ruN a/src/hle/nvn/shadow_pass.h b/src/hle/nvn/shadow_pass.h
+--- a/src/hle/nvn/shadow_pass.h	1970-01-01 00:00:00.000000000 +0000
++++ b/src/hle/nvn/shadow_pass.h	2026-11-23 11:33:55.192350136 +0000
+@@ -0,0 +1,19 @@
++// lighting_off: which render passes are shadow maps.
++#pragma once
++
++namespace dsr::hle::nvn {
++
++// The game's shadow map is a square depth image whose side is a power of two in the engine's debug-menu range
++// (ShadwoMap Size, 512..2048; 2048 by default, 512 with performance mode / lighting_lite). It is drawn by a depth-only
++// pass: no pixel program and no colour target. The screen's depth prepass, the half / quarter size particle depth
++// buffers and every colour pass are not square, or have a pixel program, so they never match.
++inline bool IsShadowMapSize(int width, int height) {
++    return width == height && width >= 512 && width <= 2048 && (width & (width - 1)) == 0;
++}
++
++// `has_pixel_program`: a pixel program is bound; `colour_targets`: colour attachments that are bound and usable.
++inline bool IsShadowMapPass(int depth_width, int depth_height, bool has_pixel_program, int colour_targets) {
++    return !has_pixel_program && colour_targets == 0 && IsShadowMapSize(depth_width, depth_height);
++}
++
++}  // namespace dsr::hle::nvn
+diff -ruN a/src/hle/nvn/vk_backend.cpp b/src/hle/nvn/vk_backend.cpp
+--- a/src/hle/nvn/vk_backend.cpp	2026-11-23 11:33:55.186922090 +0000
++++ b/src/hle/nvn/vk_backend.cpp	2026-11-23 11:33:55.192253598 +0000
+@@ -50,6 +50,7 @@
+ #include "hle/nvn/parallel.h"
+ #include "runtime/runtime.h"
+ #include "hle/nvn/layout.h"
++#include "hle/nvn/shadow_pass.h"
+ #include "hle/os/os.h"
+ #include "hle/nvn/shader/translator.h"
+ #include "hle/nvn/state.h"
+@@ -1587,8 +1588,10 @@
+         dsr::SetGpuHasBc(features_.textureCompressionBC || bc_forced_);
+         tex_quality_ = std::clamp(dsr::GetRuntime().config.texture_quality, 25, 100);
+         mip_skip_ = tex_quality_ < 100;
++        lighting_off_ = dsr::GetRuntime().config.lighting_off;
+         load_skip_ = dsr::GetRuntime().config.pass_load_skip;
+         ChooseStagingMemory();
++        if (lighting_off_) LOGI(kTag, "lighting_off: shadow map passes are not drawn and the shadow lookups say \"lit\"");
+         if (mip_skip_) LOGI(kTag, "texture_quality %d%%: big BC textures are loaded without their %s", tex_quality_,
+                             tex_quality_ <= 37 ? "two most detailed levels" : tex_quality_ <= 62 ? "most detailed level"
+                                                                                                  : "most detailed level (only the biggest ones)");
+@@ -2996,6 +2999,8 @@
+                 case 3: ci.compareOp = VK_COMPARE_OP_NEVER; break;
+                 default: break;
+             }
++            // lighting_off: nothing is in shadow, whatever the (undrawn) shadow map holds.
++            if (lighting_off_) ci.compareOp = VK_COMPARE_OP_NEVER;
+         }
+         ci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+         VkSampler smp = VK_NULL_HANDLE;
+@@ -4579,6 +4584,17 @@
+             while (!colors.empty() && !colors.back()) colors.pop_back();
+         if (depth && !IsDepthFormat(depth->nvn_format)) depth = nullptr;
+ 
++        // lighting_off: shadow maps are not drawn. The pass is dropped before its render pass starts (no depth
++        // load / store, no vertex work for the casters); the sampler says "lit" whatever the map holds.
++        if (lighting_off_ && depth && layers_ok(*depth) &&
++            IsShadowMapPass(depth->width, depth->height, st_.program[1] != nullptr,
++                            int(std::count_if(colors.begin(), colors.end(), [](const Image* c) { return c != nullptr; })))) {
++            if (shadow_draws_skipped_++ == 0)
++                LOGI(kTag, "lighting_off: first shadow map pass skipped (depth image %dx%d)", depth->width, depth->height);
++            depth->clear_pending = false;  // the game's per-frame clear of the map: nothing reads it, so it is not made
++            return;
++        }
++
+         Begin();
+         // Keep enough streaming space for this draw so nothing allocated below is lost to a flush.
+         if (StreamRemaining() < (16ull << 20)) Flush();
+@@ -6369,6 +6385,8 @@
+             LOGI(kTag, "memory: process %ld MB resident, %zu GPU images using %llu MB, %zu index ranges cached%s", rss_kb / 1024,
+                  images_.size(), (unsigned long long)(gpu >> 20), index_ranges_.size(),
+                  mip_skip_ ? (", " + std::to_string(mip_skipped_) + " big textures at " + std::to_string(tex_quality_) + "% quality").c_str() : "");
++            if (lighting_off_)
++                LOGI(kTag, "lighting_off: %llu shadow map draws skipped", (unsigned long long)shadow_draws_skipped_);
+         }
+         if (big_checks_) {
+             LOGI(kTag, "game-written textures (>= 512x512): %llu checks, %llu changed and re-uploaded",
+@@ -6857,6 +6875,9 @@
+     bool mip_skip_ = false;      // settings texture_quality < 100
+     int tex_quality_ = 100;      // settings texture_quality (25..100 %)
+     uint64_t mip_skipped_ = 0;   // images created without their top level(s)
++    bool lighting_off_ = false;  // settings lighting_off
++    uint64_t shadow_draws_skipped_ = 0;  // draws dropped from shadow map passes (lighting_off)
++    static bool layers_ok(const Image& d) { return d.layers <= 1 && d.depth <= 1; }
+     int hud_box_w_ = 0, hud_box_h_ = 0;
+     std::unordered_set<uint64_t> hud_box_logged_;
+     uint64_t hud_full_screen_ = 0;
+diff -ruN a/src/platform/android/android_main.cpp b/src/platform/android/android_main.cpp
+--- a/src/platform/android/android_main.cpp	2026-11-23 11:33:55.187633169 +0000
++++ b/src/platform/android/android_main.cpp	2026-11-23 11:33:55.192581630 +0000
+@@ -535,6 +535,7 @@
+             else if (!strcmp(key, "recorder_copies")) cfg->recorder_copies = v != 0;
+             else if (!strcmp(key, "lighter_post_fx")) cfg->lighter_post_fx = v != 0;
+             else if (!strcmp(key, "lighting_lite")) cfg->lighting_lite = v != 0;
++            else if (!strcmp(key, "lighting_off")) cfg->lighting_off = v != 0;
+             else if (!strcmp(key, "gamma")) {
+                 const float g = float(atof(value));
+                 cfg->gamma = g >= 0.5f && g <= 3.0f ? g : 1.0f;
+@@ -613,6 +614,7 @@
+          path.c_str(), cfg->target_fps, cfg->dynamic_fps ? " (auto)" : cfg->unlocked_fps ? " (unlocked)" : "", cfg->async_pipelines ? "on" : "off", cfg->auto_capture ? "on" : "off",
+          cfg->profile ? "on" : "off", cfg->gamma, cfg->exposure, cfg->present_mode.c_str(),
+          g_face_by_position ? "position" : "label");
++    if (cfg->lighting_off) LOGI(kTag, "settings: lighting_off 1 (no shadow passes, no light effects)");
+     LOGI(kTag, "settings: gpu_driver %s, bc_enabler %d, language %s, render scale %.2f, shadow_compare %d, game_hooks %d, skip_intro %d, render_pass_objects %d, mali_barriers %d, performance_mode %d, texture_quality %d%%, lighter_post_fx %d, present_mode %s, hole_test %d", cfg->gpu_driver.c_str(),
+          int(cfg->bc_enabler), cfg->language.c_str(), cfg->render_scale, cfg->shadow_compare,
+          int(cfg->game_hooks), int(cfg->skip_intro), int(cfg->render_pass_objects), int(cfg->mali_barriers), int(cfg->performance_mode), cfg->texture_quality, int(cfg->lighter_post_fx), cfg->present_mode.c_str(),
+diff -ruN a/src/runtime/hooks.cpp b/src/runtime/hooks.cpp
+--- a/src/runtime/hooks.cpp	2026-11-23 11:33:55.187723396 +0000
++++ b/src/runtime/hooks.cpp	2026-11-23 11:33:55.192675143 +0000
+@@ -675,8 +675,9 @@
+     if (rt.config.skip_intro) SkipIntroLogos(rt, b);
+     // The experimental preset reuses only engine switches already identified and validated for this build.
+     // It is deliberately not described as full lighting/shadow shutdown: shadow rendering remains active.
+-    if (rt.config.lighting_lite) {
+-        LOGI("hooks", "lighting_lite: applying verified reduced-effects preset");
++    // lighting_off adds the shadow-pass suppression of the Vulkan backend (not a game patch) to the same preset.
++    if (rt.config.lighting_lite || rt.config.lighting_off) {
++        LOGI("hooks", "%s: applying verified reduced-effects preset", rt.config.lighting_off ? "lighting_off" : "lighting_lite");
+         ApplyPerformanceMode(rt, b);
+         ApplyLighterPostFx(rt, b);
+     } else {
+diff -ruN a/src/runtime/runtime.h b/src/runtime/runtime.h
+--- a/src/runtime/runtime.h	2026-11-23 11:33:55.187745302 +0000
++++ b/src/runtime/runtime.h	2026-11-23 11:33:55.192703032 +0000
+@@ -106,6 +106,12 @@
+     // lighting_lite = 1: experimental preset combining verified low-quality VFX, reduced shadow-map
+     // resolution (512x512) and lighter post-processing. This does not disable every lighting or shadow pass.
+     bool lighting_lite = false;
++    // lighting_off = 1 (experimental): no shadows and no light effects. Everything lighting_lite does (the engine's own
++    // switches: low-quality effects, no ambient occlusion / depth of field / motion blur / light shafts, 512 shadow
++    // maps), and the shadow passes are not drawn at all: a depth-only pass into a square power-of-two depth image of
++    // 512..2048 (the shadow map) is skipped before its render pass starts, and the shadow lookups always say "lit".
++    // The objects' own base lighting stays (it is part of their shaders; there is no verified switch for it).
++    bool lighting_off = false;
+     // skip_intro = 1: the company logos at the start are skipped (straight to the title movie).
+     bool skip_intro = false;
+     int max_anisotropy = 0;  // limit on the game's anisotropic texture filtering (0 = the game's own level)
+diff -ruN a/tests/runtime_tests.cpp b/tests/runtime_tests.cpp
+--- a/tests/runtime_tests.cpp	2026-11-23 11:33:55.187844514 +0000
++++ b/tests/runtime_tests.cpp	2026-11-23 11:33:55.192769804 +0000
+@@ -14,6 +14,7 @@
+ #include "hle/nvn/backend.h"
+ #include "hle/nvn/state.h"
+ #include "hle/nvn/layout.h"
++#include "hle/nvn/shadow_pass.h"
+ #include "hle/nvn/shader/translator.h"
+ #include "hle/registry.h"
+ #include "loader/dynamic_thunks.h"
+@@ -796,6 +797,29 @@
+     CHECK(skip == 2 && l.levels[size_t(skip)].width == 512 && l.levels[size_t(skip)].height == 512);
+ }
+ 
++// lighting_off: which render passes are shadow maps.
++static void TestShadowPassDetection() {
++    using namespace dsr::hle::nvn;
++    // The shadow map: depth only (no pixel program, no colour target), square, power of two, 512..2048.
++    CHECK(IsShadowMapPass(2048, 2048, false, 0));
++    CHECK(IsShadowMapPass(1024, 1024, false, 0));
++    CHECK(IsShadowMapPass(512, 512, false, 0));
++    // Never a shadow map: a pixel program or a colour target is present (colour passes, half / quarter depth buffers).
++    CHECK(!IsShadowMapPass(2048, 2048, true, 0));
++    CHECK(!IsShadowMapPass(2048, 2048, false, 1));
++    CHECK(!IsShadowMapPass(1024, 1024, true, 3));
++    // Never a shadow map: the screen's depth prepass and its reduced copies are not square.
++    CHECK(!IsShadowMapPass(1280, 720, false, 0));
++    CHECK(!IsShadowMapPass(1920, 1080, false, 0));
++    CHECK(!IsShadowMapPass(640, 360, false, 0));
++    CHECK(!IsShadowMapPass(2048, 1024, false, 0));
++    // Outside the debug menu's range, or not a power of two.
++    CHECK(!IsShadowMapPass(256, 256, false, 0));
++    CHECK(!IsShadowMapPass(4096, 4096, false, 0));
++    CHECK(!IsShadowMapPass(720, 720, false, 0));
++    CHECK(!IsShadowMapPass(0, 0, false, 0));
++}
++
+ int main() {
+     struct T { const char* name; void (*fn)(); } tests[] = {
+         {"lz4", TestLz4},
+@@ -807,6 +831,7 @@
+         {"shader_translator", TestShaderTranslator},
+         {"block_linear", TestBlockLinear},
+         {"texture_quality", TestTextureQuality},
++        {"shadow_pass", TestShadowPassDetection},
+         {"etc_encode", TestEtcEncode},
+         {"cheats", TestCheats},
+ #if defined(__aarch64__)
