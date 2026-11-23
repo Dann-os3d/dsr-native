@@ -795,17 +795,17 @@ final class Strings {
                 "沒有可選擇檔案的應用程式。請將 .txt 檔案複製到 %s（以版本 ID 命名），然後重新開啟此分頁。");
         put("lighting_lite_t", "Lighting-lite (experimental)", "Éclairage allégé (expérimental)", "Beleuchtung reduziert (experimentell)", "Illuminazione ridotta (sperimentale)", "Iluminación reducida (experimental)", "Iluminação reduzida (experimental)", "Облегчённое освещение (экспериментально)", "簡易ライティング（実験的）", "조명 간소화 (실험적)", "简化光照（实验性）", "簡化光照（實驗性）");
         put("lighting_lite_n",
-                "Combines low-quality effects, 1024px shadow maps and lighter post-processing. Shadows and core lighting remain active; a flatter image may improve GPU performance. Restart the game to apply.",
-                "Combine des effets de basse qualité, des ombres de 1024 px et un post-traitement allégé. Les ombres et l’éclairage principal restent actifs ; l’image peut être plus plate. Redémarrez le jeu.",
-                "Kombiniert Effekte niedriger Qualität, 1024-Pixel-Schattenkarten und leichtere Nachbearbeitung. Schatten und Grundbeleuchtung bleiben aktiv; das Bild kann flacher wirken. Spiel neu starten.",
-                "Combina effetti di bassa qualità, ombre da 1024 px e post-elaborazione ridotta. Ombre e illuminazione principale restano attive; l’immagine può apparire più piatta. Riavvia il gioco.",
-                "Combina efectos de baja calidad, sombras de 1024 px y posprocesado ligero. Las sombras y la iluminación principal siguen activas; la imagen puede verse más plana. Reinicia el juego.",
-                "Combina efeitos de baixa qualidade, sombras de 1024 px e pós-processamento leve. Sombras e iluminação principal continuam ativas; a imagem pode ficar mais plana. Reinicie o jogo.",
-                "Объединяет эффекты низкого качества, карты теней 1024 px и облегчённую постобработку. Тени и основное освещение остаются включёнными; изображение может стать более плоским. Перезапустите игру.",
-                "低品質エフェクト、1024px シャドウマップ、軽量ポストプロセスを組み合わせます。影と基本照明は有効のままです。ゲームを再起動してください。",
-                "저품질 효과, 1024px 그림자 맵, 경량 후처리를 함께 적용합니다. 그림자와 기본 조명은 계속 활성화됩니다. 게임을 다시 시작하세요.",
-                "组合低质量特效、1024px 阴影贴图和轻量后期处理。阴影与基础照明仍会启用；画面可能更平。请重启游戏。",
-                "結合低品質特效、1024px 陰影貼圖與輕量後製。陰影與基本光照仍會啟用；畫面可能較平。請重新啟動遊戲。");
+                "Combines low-quality effects, 512px shadow maps and lighter post-processing. Shadows and core lighting remain active; a flatter image may improve GPU performance. Restart the game to apply.",
+                "Combine des effets de basse qualité, des ombres de 512 px et un post-traitement allégé. Les ombres et l’éclairage principal restent actifs ; l’image peut être plus plate. Redémarrez le jeu.",
+                "Kombiniert Effekte niedriger Qualität, 512-Pixel-Schattenkarten und leichtere Nachbearbeitung. Schatten und Grundbeleuchtung bleiben aktiv; das Bild kann flacher wirken. Spiel neu starten.",
+                "Combina effetti di bassa qualità, ombre da 512 px e post-elaborazione ridotta. Ombre e illuminazione principale restano attive; l’immagine può apparire più piatta. Riavvia il gioco.",
+                "Combina efectos de baja calidad, sombras de 512 px y posprocesado ligero. Las sombras y la iluminación principal siguen activas; la imagen puede verse más plana. Reinicia el juego.",
+                "Combina efeitos de baixa qualidade, sombras de 512 px e pós-processamento leve. Sombras e iluminação principal continuam ativas; a imagem pode ficar mais plana. Reinicie o jogo.",
+                "Объединяет эффекты низкого качества, карты теней 512 px и облегчённую постобработку. Тени и основное освещение остаются включёнными; изображение может стать более плоским. Перезапустите игру.",
+                "低品質エフェクト、512px シャドウマップ、軽量ポストプロセスを組み合わせます。影と基本照明は有効のままです。ゲームを再起動してください。",
+                "저품질 효과, 512px 그림자 맵, 경량 후처리를 함께 적용합니다. 그림자와 기본 조명은 계속 활성화됩니다. 게임을 다시 시작하세요.",
+                "组合低质量特效、512px 阴影贴图和轻量后期处理。阴影与基础照明仍会启用；画面可能更平。请重启游戏。",
+                "結合低品質特效、512px 陰影貼圖與輕量後製。陰影與基本光照仍會啟用；畫面可能較平。請重新啟動遊戲。");
         put("post_t",
                 "Lighter post-processing",
                 "Post-traitement allégé",
