@@ -78,8 +78,15 @@ struct RuntimeConfig {
     // performance_mode = 1: the engine's own lower-quality options: low-quality effects, 1024x1024 shadow maps instead
     // of 2048x2048 (read at start-up). The menu also sets render_scale 0.75 when it is turned on.
     bool performance_mode = false;
-    // texture_mip_skip = 1: big BC textures (512x512 and up, with mip levels) are loaded without their most detailed
-    // level: half the width and height, ~75% less data to convert, upload and sample; softer up close.
+    // texture_quality (25..100, in %): resolution of the game's big BC textures (the art; never drawn into). Levels
+    // that are left out are never read, converted, uploaded or sampled, so this saves CPU time, GPU memory and
+    // bandwidth (not only looks). 100 = original. 75 = the biggest textures (2048+ on a side) lose their most
+    // detailed level. 50 = every big texture loses it: half the width and height, ~75% less data. 25 = the two most
+    // detailed levels: a quarter of the width and height, ~94% less data. A texture always keeps at least 256 texels
+    // on its smaller side, so small art stays sharp. Read at start-up.
+    int texture_quality = 100;
+    // texture_mip_skip = 1: the old on/off switch (= texture_quality 50). Only read when settings.txt has no
+    // texture_quality line (files from before the slider).
     int texture_mip_skip = 0;
     // pass_load_skip = 0: render passes always load their targets (by default a pass learned to overwrite a target
     // starts without loading it: vk_backend.cpp, PassCoverage).
@@ -99,6 +106,12 @@ struct RuntimeConfig {
     // lighting_lite = 1: experimental preset combining verified low-quality VFX, reduced shadow-map
     // resolution (512x512) and lighter post-processing. This does not disable every lighting or shadow pass.
     bool lighting_lite = false;
+    // lighting_off = 1 (experimental): no shadows and no light effects. Everything lighting_lite does (the engine's own
+    // switches: low-quality effects, no ambient occlusion / depth of field / motion blur / light shafts, 512 shadow
+    // maps), and the shadow passes are not drawn at all: a depth-only pass into a square power-of-two depth image of
+    // 512..2048 (the shadow map) is skipped before its render pass starts, and the shadow lookups always say "lit".
+    // The objects' own base lighting stays (it is part of their shaders; there is no verified switch for it).
+    bool lighting_off = false;
     // skip_intro = 1: the company logos at the start are skipped (straight to the title movie).
     bool skip_intro = false;
     int max_anisotropy = 0;  // limit on the game's anisotropic texture filtering (0 = the game's own level)

@@ -14,6 +14,7 @@
 #include "hle/nvn/backend.h"
 #include "hle/nvn/state.h"
 #include "hle/nvn/layout.h"
+#include "hle/nvn/shadow_pass.h"
 #include "hle/nvn/shader/translator.h"
 #include "hle/registry.h"
 #include "loader/dynamic_thunks.h"
@@ -749,6 +750,76 @@ static void TestCheats() {
     CHECK(!Validate({0xE0000000}).empty());              // unknown type
 }
 
+// texture_quality: how many of the most detailed mip levels a texture loses.
+static void TestTextureQuality() {
+    using namespace dsr::hle::nvn;
+    auto tex = [](int w, int h) {
+        TextureState t;
+        t.width = w;
+        t.height = h;
+        return t;
+    };
+    // 100% (original) and textures without mips: nothing is left out.
+    CHECK(TextureMipSkip(tex(4096, 4096), 13, 100) == 0);
+    CHECK(TextureMipSkip(tex(2048, 2048), 1, 25) == 0);
+    // 50%: one level for textures whose smaller side stays >= 256 (512 and up).
+    CHECK(TextureMipSkip(tex(1024, 1024), 11, 50) == 1);
+    CHECK(TextureMipSkip(tex(512, 512), 10, 50) == 1);
+    CHECK(TextureMipSkip(tex(256, 256), 9, 50) == 0);
+    CHECK(TextureMipSkip(tex(2048, 256), 9, 50) == 0);
+    // 25%: two levels where the smaller side stays >= 256 (1024 and up), else one, else none.
+    CHECK(TextureMipSkip(tex(2048, 2048), 12, 25) == 2);
+    CHECK(TextureMipSkip(tex(1024, 1024), 11, 25) == 2);
+    CHECK(TextureMipSkip(tex(512, 512), 10, 25) == 1);
+    CHECK(TextureMipSkip(tex(2048, 512), 12, 25) == 1);
+    CHECK(TextureMipSkip(tex(256, 256), 9, 25) == 0);
+    // 75%: only the biggest textures (2048+ on a side), one level.
+    CHECK(TextureMipSkip(tex(4096, 4096), 13, 75) == 1);
+    CHECK(TextureMipSkip(tex(2048, 1024), 12, 75) == 1);
+    CHECK(TextureMipSkip(tex(1024, 1024), 11, 75) == 0);
+    // At least one level is always left.
+    CHECK(TextureMipSkip(tex(1024, 1024), 2, 25) == 1);
+    CHECK(TextureMipSkip(tex(1024, 1024), 1, 25) == 0);
+    // Values between the menu's steps round to the nearest; the result never grows as quality drops.
+    CHECK(TextureMipSkip(tex(2048, 2048), 12, 30) == 2);
+    CHECK(TextureMipSkip(tex(2048, 2048), 12, 40) == 1);
+    CHECK(TextureMipSkip(tex(2048, 2048), 12, 70) == 1);
+    for (int w : {256, 512, 1024, 2048, 4096})
+        for (int h : {256, 512, 1024, 2048, 4096})
+            for (int q = 100; q > 25; q -= 5)
+                CHECK(TextureMipSkip(tex(w, h), 13, q - 5) >= TextureMipSkip(tex(w, h), 13, q));
+    // The image that is left holds levels skip..n: its size matches the layout's level `skip`.
+    TextureState t = tex(2048, 2048);
+    t.format = 65;  // DXT1 (BC1)
+    t.levels = 12;
+    TextureLayout l = ComputeLayout(t);
+    const int skip = TextureMipSkip(t, t.levels, 25);
+    CHECK(skip == 2 && l.levels[size_t(skip)].width == 512 && l.levels[size_t(skip)].height == 512);
+}
+
+// lighting_off: which render passes are shadow maps.
+static void TestShadowPassDetection() {
+    using namespace dsr::hle::nvn;
+    // The shadow map: depth only (no pixel program, no colour target), square, power of two, 512..2048.
+    CHECK(IsShadowMapPass(2048, 2048, false, 0));
+    CHECK(IsShadowMapPass(1024, 1024, false, 0));
+    CHECK(IsShadowMapPass(512, 512, false, 0));
+    // Never a shadow map: a pixel program or a colour target is present (colour passes, half / quarter depth buffers).
+    CHECK(!IsShadowMapPass(2048, 2048, true, 0));
+    CHECK(!IsShadowMapPass(2048, 2048, false, 1));
+    CHECK(!IsShadowMapPass(1024, 1024, true, 3));
+    // Never a shadow map: the screen's depth prepass and its reduced copies are not square.
+    CHECK(!IsShadowMapPass(1280, 720, false, 0));
+    CHECK(!IsShadowMapPass(1920, 1080, false, 0));
+    CHECK(!IsShadowMapPass(640, 360, false, 0));
+    CHECK(!IsShadowMapPass(2048, 1024, false, 0));
+    // Outside the debug menu's range, or not a power of two.
+    CHECK(!IsShadowMapPass(256, 256, false, 0));
+    CHECK(!IsShadowMapPass(4096, 4096, false, 0));
+    CHECK(!IsShadowMapPass(720, 720, false, 0));
+    CHECK(!IsShadowMapPass(0, 0, false, 0));
+}
+
 int main() {
     struct T { const char* name; void (*fn)(); } tests[] = {
         {"lz4", TestLz4},
@@ -759,6 +830,8 @@ int main() {
         {"nvn_commands", TestNvnCommands},
         {"shader_translator", TestShaderTranslator},
         {"block_linear", TestBlockLinear},
+        {"texture_quality", TestTextureQuality},
+        {"shadow_pass", TestShadowPassDetection},
         {"etc_encode", TestEtcEncode},
         {"cheats", TestCheats},
 #if defined(__aarch64__)

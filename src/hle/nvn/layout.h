@@ -37,6 +37,13 @@ struct TextureLayout {
 
 TextureLayout ComputeLayout(const TextureState& t);
 
+// texture_quality (settings, 25..100 %): how many of a texture's most detailed mip levels are left out when it is
+// loaded (0 = load it whole). 25%: up to two levels (a quarter of the width and height, ~94% less data), 50%: one
+// level (~75% less data), 75%: one level for the biggest textures only (2048+ on a side); 100%: none. Values between
+// the menu's steps round to the nearest step. Whatever the quality, the smaller side keeps at least 256 texels (small
+// art and UI stay sharp) and at least one level is left (`levels` = the levels the texture has).
+int TextureMipSkip(const TextureState& tex, int levels, int quality);
+
 // Converts one level of one layer between block-linear (src/dst at the level's offset) and tightly
 // packed rows (row_bytes per row, rows per slice, depth slices).
 void DeswizzleLevel(uint8_t* linear, const uint8_t* swizzled, const LevelLayout& l);
