@@ -76,7 +76,7 @@ struct RuntimeConfig {
     // render targets made readable when their pass ends, so a tile-based GPU (Mali) can overlap passes. Off by default.
     bool mali_barriers = false;
     // performance_mode = 1: the engine's own lower-quality options: low-quality effects, 1024x1024 shadow maps instead
-    // of 2048x2048 (read at start-up). The menu also sets render_scale 0.75 when it is turned on.
+    // of 2048x2048 (read at start-up). The menu also sets render_scale 0.50 when it is turned on.
     bool performance_mode = false;
     // texture_mip_skip = 1: big BC textures (512x512 and up, with mip levels) are loaded without their most detailed
     // level: half the width and height, ~75% less data to convert, upload and sample; softer up close.
