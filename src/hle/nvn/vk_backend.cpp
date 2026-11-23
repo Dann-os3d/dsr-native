@@ -1808,7 +1808,7 @@ private:
         }
         const std::string tmp = path + ".tmp";
         if (FILE* f = fopen(tmp.c_str(), "wb")) {
-            const bool ok = fwrite(data.data(), 1, n, f) == n;
+            const bool ok = fwrite(data.data(), 1, data.size(), f) == data.size();
             fclose(f);
             if (ok) rename(tmp.c_str(), path.c_str());
         }
