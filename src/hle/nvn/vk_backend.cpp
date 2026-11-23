@@ -1657,11 +1657,14 @@ private:
         return true;
     }
 
-    // Memory for the per-frame staging buffers (the slots' streams, the geometry cache): see settings staging_memory.
-    VkMemoryPropertyFlags staging_flags_ = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    // Memory for per-frame staging buffers (the slots' streams and geometry cache).
+    const VkMemoryPropertyFlags staging_required_ =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    enum class StagingPreference { FirstCompatible, Cached, Uncached };
+    StagingPreference staging_preference_ = StagingPreference::FirstCompatible;
     void ChooseStagingMemory() {
         std::string types;
-        bool cached_coherent = false;
+        bool cached_coherent = false, uncached_coherent = false;
         for (uint32_t i = 0; i < mem_props_.memoryTypeCount; i++) {
             const VkMemoryPropertyFlags f = mem_props_.memoryTypes[i].propertyFlags;
             char t[64];
@@ -1669,22 +1672,38 @@ private:
                      f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT ? "V" : "", f & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT ? "C" : "",
                      f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT ? "$" : "");
             types += t;
-            const VkMemoryPropertyFlags want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
-                                               VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
-            if ((f & want) == want) cached_coherent = true;
+            if ((f & staging_required_) == staging_required_) {
+                if (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) cached_coherent = true;
+                else uncached_coherent = true;
+            }
         }
         const std::string& mode = dsr::GetRuntime().config.staging_memory;
         const bool adreno = props_.vendorID == 0x5143;
-        const bool cached = cached_coherent && (mode == "cached" || (mode != "uncached" && adreno));
-        if (cached) staging_flags_ |= VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
-        LOGI(kTag, "memory types (D device-local, V host-visible, C coherent, $ cached):%s | staging memory: %s "
-             "(staging_memory %s)", types.c_str(), cached ? "cached" : "first host-visible", mode.c_str());
+        if (mode == "cached" || (mode != "uncached" && adreno))
+            staging_preference_ = StagingPreference::Cached;
+        else if (mode == "uncached")
+            staging_preference_ = StagingPreference::Uncached;
+        LOGI(kTag, "memory types (D device-local, V host-visible, C coherent, $ cached):%s | staging preference: %s "
+             "(cached available %s, uncached available %s; staging_memory %s)", types.c_str(),
+             staging_preference_ == StagingPreference::Cached ? "cached" :
+             staging_preference_ == StagingPreference::Uncached ? "uncached" : "first compatible",
+             cached_coherent ? "yes" : "no", uncached_coherent ? "yes" : "no", mode.c_str());
     }
-    // A host-visible, coherent type for staging buffers: cached as chosen above where the buffer allows it.
+    // Prefer the requested host-visible/coherent type when available; always fall back to a compatible type.
     uint32_t StagingMemory(uint32_t bits) {
-        for (uint32_t i = 0; i < mem_props_.memoryTypeCount; i++)
-            if ((bits & (1u << i)) && (mem_props_.memoryTypes[i].propertyFlags & staging_flags_) == staging_flags_) return i;
-        return FindMemory(bits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        uint32_t first = UINT32_MAX;
+        for (uint32_t i = 0; i < mem_props_.memoryTypeCount; i++) {
+            if (!(bits & (1u << i))) continue;
+            const VkMemoryPropertyFlags f = mem_props_.memoryTypes[i].propertyFlags;
+            if ((f & staging_required_) != staging_required_) continue;
+            if (first == UINT32_MAX) first = i;
+            const bool cached = (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0;
+            if (staging_preference_ == StagingPreference::Cached && cached) return i;
+            if (staging_preference_ == StagingPreference::Uncached && !cached) return i;
+            if (staging_preference_ == StagingPreference::FirstCompatible) return i;
+        }
+        if (first != UINT32_MAX) return first;  // requested preference unavailable for this buffer
+        return FindMemory(bits, staging_required_);
     }
     uint32_t FindMemory(uint32_t bits, VkMemoryPropertyFlags want) {
         for (uint32_t i = 0; i < mem_props_.memoryTypeCount; i++)
