@@ -6382,6 +6382,30 @@ private:
              (unsigned long long)render_passes_, (unsigned long long)barriers_, (unsigned long long)vertex_read_barriers_);
         vertex_read_barriers_ = 0;
         render_passes_ = barriers_ = 0;
+        size_t rp_size = 0, fb_size = 0;
+        {
+            std::lock_guard<std::mutex> lk(rp_mutex_);
+            rp_size = render_passes_cache_.size();
+        }
+        {
+            std::lock_guard<std::mutex> lk(fb_mutex_);
+            fb_size = fb_cache_.size();
+        }
+        if (rp_cache_hits_ || rp_cache_misses_ || fb_cache_hits_ || fb_cache_misses_ ||
+            fb_cache_created_ || fb_cache_destroyed_) {
+            const uint64_t rp_total = rp_cache_hits_ + rp_cache_misses_;
+            const uint64_t fb_total = fb_cache_hits_ + fb_cache_misses_;
+            LOGI(kTag, "render-object cache (last 10 s): renderpass %llu hits/%llu misses, %llu created, %zu live; "
+                 "framebuffer %llu hits/%llu misses, %llu created/%llu destroyed, %zu live",
+                 (unsigned long long)rp_cache_hits_, (unsigned long long)rp_cache_misses_,
+                 (unsigned long long)rp_cache_created_, rp_size,
+                 (unsigned long long)fb_cache_hits_, (unsigned long long)fb_cache_misses_,
+                 (unsigned long long)fb_cache_created_, (unsigned long long)fb_cache_destroyed_, fb_size);
+            (void)rp_total;
+            (void)fb_total;
+            rp_cache_hits_ = rp_cache_misses_ = rp_cache_created_ = 0;
+            fb_cache_hits_ = fb_cache_misses_ = fb_cache_created_ = fb_cache_destroyed_ = 0;
+        }
         if (!pass_breaks_.empty()) {
             std::vector<std::pair<uint64_t, int>> v;
             for (auto& [line, n] : pass_breaks_) v.push_back({n, line});
@@ -6552,6 +6576,9 @@ private:
     std::map<std::vector<uint32_t>, VkRenderPass> render_passes_cache_;
     std::mutex fb_mutex_;
     std::map<std::vector<uint64_t>, VkFramebuffer> fb_cache_;  // {render pass, w<<32|h, views...}
+    // Recorder-thread counters, sampled by ReportDraws() after Drain() has quiesced the recorder.
+    uint64_t rp_cache_hits_ = 0, rp_cache_misses_ = 0, rp_cache_created_ = 0;
+    uint64_t fb_cache_hits_ = 0, fb_cache_misses_ = 0, fb_cache_created_ = 0, fb_cache_destroyed_ = 0;
     // Destroys cached framebuffers that use any of `views` (about to be destroyed; the GPU is done with them).
     void ForgetFramebuffers(const std::vector<VkImageView>& views) {
         if (views.empty()) return;
@@ -6566,6 +6593,7 @@ private:
                     }
             if (uses) {
                 vkDestroyFramebuffer(device_, it->second, nullptr);
+                fb_cache_destroyed_++;
                 it = fb_cache_.erase(it);
             } else {
                 ++it;
@@ -6581,10 +6609,15 @@ private:
         }
         key.push_back(0xffffffffu);
         key.push_back(uint32_t(depth));
+        key.push_back(uint32_t(stencil_hint));
         key.push_back(uint32_t(depth_load));
         std::lock_guard<std::mutex> lk(rp_mutex_);
         auto it = render_passes_cache_.find(key);
-        if (it != render_passes_cache_.end()) return it->second;
+        if (it != render_passes_cache_.end()) {
+            rp_cache_hits_++;
+            return it->second;
+        }
+        rp_cache_misses_++;
         std::vector<VkAttachmentDescription> att;
         std::vector<VkAttachmentReference> refs;
         for (uint32_t i = 0; i < ncolors; i++) {
@@ -6633,6 +6666,7 @@ private:
             rp = VK_NULL_HANDLE;
         }
         render_passes_cache_[key] = rp;
+        if (rp) rp_cache_created_++;
         return rp;
     }
     VkRenderPass CompatRenderPass(const std::vector<VkFormat>& colors, VkFormat depth, VkFormat stencil) {
@@ -6679,9 +6713,13 @@ private:
         {
             std::lock_guard<std::mutex> lk(fb_mutex_);
             auto it = fb_cache_.find(key);
-            if (it != fb_cache_.end()) fb = it->second;
+            if (it != fb_cache_.end()) {
+                fb = it->second;
+                fb_cache_hits_++;
+            }
         }
         if (!fb) {
+            fb_cache_misses_++;
             VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             fi.renderPass = rp;
             fi.attachmentCount = nviews;
@@ -6694,7 +6732,14 @@ private:
                 return;
             }
             std::lock_guard<std::mutex> lk(fb_mutex_);
-            fb_cache_.emplace(std::move(key), fb);
+            auto [it, inserted] = fb_cache_.emplace(std::move(key), fb);
+            if (inserted) {
+                fb_cache_created_++;
+            } else {
+                // Defensive: if recorder ownership changes in a future backend, avoid leaking a duplicate.
+                vkDestroyFramebuffer(device_, fb, nullptr);
+                fb = it->second;
+            }
         }
         VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         bi.renderPass = rp;
