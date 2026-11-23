@@ -286,6 +286,25 @@ final class Strings {
                 "큰 텍스처를 가장 세밀한 단계 없이 불러옵니다: 텍스처 데이터 약 75% 감소, 가까이서는 조금 흐립니다. BC를 지원하지 않는 GPU에서는 성능 모드가 이를 켭니다.",
                 "大纹理不加载最精细的一级：纹理数据减少约 75%，近看略模糊。在不支持 BC 的 GPU 上，性能模式会将其开启。",
                 "大型紋理不載入最精細的一級：紋理資料減少約 75%，近看略模糊。在不支援 BC 的 GPU 上，效能模式會將其開啟。");
+        put("texture_quality_t", "Texture quality", "Qualité des textures", "Texturqualität", "Qualità texture",
+                "Calidad de texturas", "Qualidade das texturas", "Качество текстур", "テクスチャ品質", "텍스처 품질", "纹理质量", "紋理品質");
+        put("texture_quality_n",
+                "Applies a global mip bias to material textures: lower detail uses less texture sampling bandwidth. Shadow maps are unchanged.",
+                "Applique un biais MIP global aux textures des matériaux : moins de détails réduit la bande passante d'échantillonnage. Les ombres ne changent pas.",
+                "Wendet einen globalen MIP-Bias auf Materialtexturen an: weniger Details benötigen weniger Textur-Sampling-Bandbreite. Schatten bleiben unverändert.",
+                "Applica un bias MIP globale alle texture dei materiali: meno dettagli riducono la banda di campionamento. Le ombre non cambiano.",
+                "Reduce el detalle de las texturas del juego para disminuir el muestreo gráfico. No cambia la resolución ni las sombras.",
+                "Aplica um viés MIP global às texturas dos materiais: menos detalhes reduzem a largura de banda de amostragem. Sombras não mudam.",
+                "Глобально снижает детализацию текстур материалов, уменьшая нагрузку на выборку. Карты теней не меняются.",
+                "マテリアルテクスチャ全体の MIP バイアスを調整し、詳細度を下げてサンプリング負荷を軽減します。影マップは変更しません。",
+                "머티리얼 텍스처 전체의 MIP 바이어스를 조정해 세부 묘사와 샘플링 부하를 낮춥니다. 그림자 맵은 변경하지 않습니다.",
+                "全局调整材质纹理的 MIP 偏移，降低细节以减少采样带宽。阴影贴图不变。",
+                "全域調整材質紋理的 MIP 偏移，降低細節以減少取樣頻寬。陰影貼圖不變。");
+        put("texture_quality_original", "Original", "Originale", "Original", "Originale", "Original", "Original", "Оригинал", "オリジナル", "원본", "原始", "原始");
+        put("texture_quality_vhigh", "Very high", "Très élevée", "Sehr hoch", "Molto alta", "Muy alta", "Muito alta", "Очень высокое", "非常に高い", "매우 높음", "极高", "極高");
+        put("texture_quality_high", "High", "Élevée", "Hoch", "Alta", "Alta", "Alta", "Высокое", "高い", "높음", "高", "高");
+        put("texture_quality_low", "Low", "Faible", "Niedrig", "Bassa", "Baja", "Baixa", "Низкое", "低い", "낮음", "低", "低");
+        put("texture_quality_min", "Minimum", "Minimale", "Minimum", "Minima", "Mínima", "Mínima", "Минимум", "最低", "최소", "最低", "最低");
         put("malib_t", "Tile-GPU barriers (experimental)", "Barrières GPU à tuiles (expérimental)",
                 "Kachel-GPU-Barrieren (experimentell)", "Barriere GPU a tile (sperimentale)",
                 "Barreras para GPU por mosaicos (experimental)", "Barreiras para GPU em blocos (experimental)",
