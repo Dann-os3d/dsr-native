@@ -1,0 +1,554 @@
+diff -ruN a/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java b/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
+--- a/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java	2026-11-23 06:10:37.063805479 +0000
++++ b/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java	2026-11-23 06:10:37.068607434 +0000
+@@ -286,7 +286,7 @@
+             "tab_language"};
+     private static final int TAB_GRAPHICS = 2, TAB_TOUCH = 3, TAB_CHEATS = 4, TAB_LANGUAGE = 5;
+     private final TextView[] mTabs = new TextView[TAB_KEYS.length];
+-    private TextView mHint, mClose, mScaleLabel;
++    private TextView mHint, mClose, mScaleLabel, mTexLabel;
+     private int mTab = 0;
+     private boolean mEditingLayout;
+     private Map<String, String> mValues = new HashMap<>();
+@@ -413,6 +413,7 @@
+         for (int i = 0; i < mTabs.length; i++) mTabs[i].setSelected(i == tab);
+         mBody.removeAllViews();
+         mScaleLabel = null;
++        mTexLabel = null;
+         mValues = readSettings();
+         switch (tab) {
+             case 0: buildDriverTab(); break;
+@@ -450,6 +451,7 @@
+         toggle("performance_mode", Strings.t("perf_t"), Strings.t("perf_n") + " " + Strings.t("changes_next"), "1", "0",
+                 "0");
+         renderScale();  // performance mode sets 75%; it can be moved freely afterwards
++        textureQuality();
+         toggle("lighter_post_fx", Strings.t("post_t"), Strings.t("post_n") + " " + Strings.t("changes_next"), "1", "0",
+                 "0");
+         toggle("lighting_lite", Strings.t("lighting_lite_t"), Strings.t("lighting_lite_n") + " "
+@@ -458,8 +460,6 @@
+         section(Strings.t("sec_gpu"));
+         note(Strings.t("gpu_n"));
+         toggle("bc3_etc2", Strings.t("bc3_t"), Strings.t("bc3_n") + " " + Strings.t("changes_next"), "1", "0", "0");
+-        toggle("texture_mip_skip", Strings.t("mip_t"), Strings.t("mip_n") + " " + Strings.t("changes_next"), "1", "0",
+-                "0");
+         toggle("mali_barriers", Strings.t("malib_t"), Strings.t("malib_n") + " " + Strings.t("changes_next"), "1", "0",
+                 "0");
+     }
+@@ -727,6 +727,91 @@
+         mBody.addView(bar, lp);
+     }
+ 
++    // ---- texture quality ----------------------------------------------------------------------------------------
++
++    /** texture_quality steps: 25, 50, 75, 100 % (slider positions 0..3). */
++    private static final int TQ_MIN = 25, TQ_STEP = 25, TQ_STEPS = 3;
++
++    /** The texture quality in settings.txt (100 when unset; files from before the slider had texture_mip_skip = 50). */
++    private int currentTextureQuality() {
++        String v = mValues.get("texture_quality");
++        if (v == null) return "1".equals(mValues.get("texture_mip_skip")) ? 50 : 100;
++        int q = Math.round(parse(v, 100f));
++        if (q <= 0) return 100;
++        return Math.max(TQ_MIN, Math.min(100, q));
++    }
++
++    private void updateTexLabel(int q) {
++        if (mTexLabel == null) return;
++        String what = Strings.t(q >= 100 ? "tq_100" : q >= 75 ? "tq_75" : q >= 50 ? "tq_50" : "tq_25");
++        mTexLabel.setText(q + "%   ·   " + what);
++    }
++
++    private void textureQuality() {
++        final String title = Strings.t("tq_t");
++        TextView t = text(title, 15, TEXT, true);
++        t.setPadding(0, dp(10), 0, 0);
++        mBody.addView(t);
++        mBody.addView(text(Strings.t("tq_n") + " " + Strings.t("changes_next"), 12, DIM, false));
++        final int[] shown = {Math.max(TQ_MIN, Math.min(100, Math.round(currentTextureQuality() / (float) TQ_STEP) * TQ_STEP))};
++        mTexLabel = text("", 14, GOLD, true);
++        mTexLabel.setPadding(0, dp(6), 0, 0);
++        mBody.addView(mTexLabel);
++        updateTexLabel(shown[0]);
++
++        final SeekBar bar = new SeekBar(mA);
++        bar.setMax(TQ_STEPS);
++        bar.setProgress((shown[0] - TQ_MIN) / TQ_STEP);
++        bar.setFocusable(true);
++        bar.setPadding(dp(18), dp(12), dp(18), dp(12));
++        bar.setProgressTintList(ColorStateList.valueOf(GOLD));
++        bar.setThumbTintList(ColorStateList.valueOf(GOLD));
++        bar.setProgressBackgroundTintList(ColorStateList.valueOf(0xFF555555));
++        StateListDrawable bg = new StateListDrawable();
++        bg.addState(new int[] {android.R.attr.state_focused}, rounded(0xFF3A3A3A, 10, 0xFFFFFFFF));
++        bg.addState(new int[] {}, rounded(CARD, 10, 0));
++        bar.setBackground(bg);
++        final boolean[] touching = {false};
++        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
++            @Override
++            public void onProgressChanged(SeekBar b, int progress, boolean fromUser) {
++                int q = TQ_MIN + progress * TQ_STEP;
++                updateTexLabel(q);
++                if (fromUser && !touching[0]) save(q, false);  // D-pad: saved at each step
++            }
++
++            @Override
++            public void onStartTrackingTouch(SeekBar b) {
++                touching[0] = true;
++            }
++
++            @Override
++            public void onStopTrackingTouch(SeekBar b) {
++                touching[0] = false;
++                save(TQ_MIN + b.getProgress() * TQ_STEP, true);
++            }
++
++            private void save(int q, boolean tell) {
++                if (q == shown[0]) return;
++                // Always written (even 100): a texture_quality line makes the game ignore the old texture_mip_skip.
++                if (!writeSetting("texture_quality", String.valueOf(q))) {
++                    cantSave();
++                    return;
++                }
++                shown[0] = q;
++                mValues.put("texture_quality", String.valueOf(q));
++                if (tell)
++                    popup(title, Strings.t("next_start", title));
++                else
++                    Toast.makeText(mA, Strings.t("changes_next"), Toast.LENGTH_SHORT).show();
++            }
++        });
++        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
++                ViewGroup.LayoutParams.WRAP_CONTENT);
++        lp.topMargin = dp(6);
++        mBody.addView(bar, lp);
++    }
++
+     // ---- Touch tab ----------------------------------------------------------------------------------------------
+ 
+     private void buildTouchTab() {
+@@ -1312,7 +1397,7 @@
+     /** Render scale performance mode sets (the player can move it afterwards; turning the mode off restores theirs). */
+     private static final String PERF_SCALE = "0.75";
+ 
+-    /** 1: the GPU has no BC support (performance mode then turns texture_mip_skip on too). */
++    /** 1: the GPU has no BC support (performance mode then lowers the texture quality to 50% too). */
+     private static boolean gpuLacksBc() {
+         try {
+             return nativeGpuHasBc() == 0;
+@@ -1321,22 +1406,38 @@
+         }
+     }
+ 
++    /** Texture quality performance mode sets on GPUs without BC support (never raises a lower choice). */
++    private static final int PERF_TEXTURE_QUALITY = 50;
++
+     /**
+      * Performance mode on: remembers the render scale and sets 75%, and on GPUs without BC support remembers
+-     * texture_mip_skip and turns it on; off: puts the remembered values back.
++     * texture_quality and lowers it to 50% and turns on lighter post-processing; off: puts the remembered values back.
+      */
+     private void performanceScale(boolean on) {
+-        // On GPUs without BC support (the weaker ones: Mali), performance mode also turns on texture mip skip and
+-        // lighter post-processing; turning it off puts back what they were.
+-        for (String key : new String[] {"texture_mip_skip", "lighter_post_fx"}) {
++        // On GPUs without BC support (the weaker ones: Mali), performance mode also lowers the texture quality and
++        // lightens post-processing; turning it off puts back what they were.
++        for (String key : new String[] {"texture_quality", "lighter_post_fx"}) {
++            final boolean tex = key.equals("texture_quality");
+             if (on && gpuLacksBc()) {
+-                String was = mValues.containsKey(key) ? mValues.get(key) : "0";
++                if (tex && currentTextureQuality() <= PERF_TEXTURE_QUALITY) continue;  // already as low or lower
++                String was = tex ? String.valueOf(currentTextureQuality())
++                        : (mValues.containsKey(key) ? mValues.get(key) : "0");
+                 writeSetting(key + "_before_perf", was);
+                 mValues.put(key + "_before_perf", was);
+-                if (writeSetting(key, "1")) mValues.put(key, "1");
++                String now = tex ? String.valueOf(PERF_TEXTURE_QUALITY) : "1";
++                if (writeSetting(key, now)) mValues.put(key, now);
+             } else if (!on) {
+                 String before = mValues.get(key + "_before_perf");
+-                if (before != null && !before.isEmpty()) {  // performance mode had turned it on: restored
++                if (tex && (before == null || before.isEmpty())) {
++                    // Performance mode may have been turned on by a version with the on/off texture_mip_skip switch.
++                    String old = mValues.get("texture_mip_skip_before_perf");
++                    if (old != null && !old.isEmpty()) {
++                        before = "1".equals(old) ? "50" : "100";
++                        writeSetting("texture_mip_skip_before_perf", "");
++                        mValues.put("texture_mip_skip_before_perf", "");
++                    }
++                }
++                if (before != null && !before.isEmpty()) {  // performance mode had changed it: restored
+                     if (writeSetting(key, before)) mValues.put(key, before);
+                     writeSetting(key + "_before_perf", "");
+                     mValues.put(key + "_before_perf", "");
+diff -ruN a/android/app/src/main/java/com/dsrnative/app/Strings.java b/android/app/src/main/java/com/dsrnative/app/Strings.java
+--- a/android/app/src/main/java/com/dsrnative/app/Strings.java	2026-11-23 06:10:37.063828110 +0000
++++ b/android/app/src/main/java/com/dsrnative/app/Strings.java	2026-11-23 06:10:37.068630801 +0000
+@@ -271,21 +271,49 @@
+                 "BC를 지원하지 않는 GPU에서 텍스처 메모리가 4분의 1로 줄어듭니다. 약간 손실이 있습니다.",
+                 "在不支持 BC 的 GPU 上纹理内存减少至 1/4；略有损失。",
+                 "在不支援 BC 的 GPU 上紋理記憶體減少至 1/4；略有損失。");
+-        put("mip_t", "Texture mip skip", "Saut de mip des textures", "Textur-Mip überspringen", "Salto mip delle texture",
+-                "Omitir mip de texturas", "Pular mip de texturas", "Пропуск MIP текстур", "テクスチャ MIP スキップ",
+-                "텍스처 밉 건너뛰기", "跳过纹理 Mip", "略過紋理 Mip");
+-        put("mip_n",
+-                "Big textures load without their most detailed level: about 75% less texture data, softer up close. Performance mode turns it on on GPUs without BC support.",
+-                "Les grandes textures se chargent sans leur niveau le plus détaillé : environ 75 % de données en moins, plus flou de près. Le mode performance l'active sur les GPU sans BC.",
+-                "Große Texturen werden ohne ihre detaillierteste Stufe geladen: etwa 75 % weniger Texturdaten, aus der Nähe weicher. Der Leistungsmodus schaltet es auf GPUs ohne BC ein.",
+-                "Le texture grandi si caricano senza il livello più dettagliato: circa il 75% di dati in meno, più morbide da vicino. La modalità prestazioni lo attiva sulle GPU senza BC.",
+-                "Las texturas grandes se cargan sin su nivel más detallado: un 75 % menos de datos, más suaves de cerca. El modo rendimiento lo activa en GPU sin BC.",
+-                "Texturas grandes carregam sem o nível mais detalhado: cerca de 75% menos dados, mais suaves de perto. O modo desempenho liga isso em GPUs sem BC.",
+-                "Большие текстуры загружаются без самого детального уровня: примерно на 75% меньше данных, вблизи мягче. Режим производительности включает это на GPU без BC.",
+-                "大きなテクスチャを最も詳細なレベルなしで読み込みます：データ量は約 75% 減、近くでは少しぼやけます。BC 非対応 GPU ではパフォーマンスモードでオンになります。",
+-                "큰 텍스처를 가장 세밀한 단계 없이 불러옵니다: 텍스처 데이터 약 75% 감소, 가까이서는 조금 흐립니다. BC를 지원하지 않는 GPU에서는 성능 모드가 이를 켭니다.",
+-                "大纹理不加载最精细的一级：纹理数据减少约 75%，近看略模糊。在不支持 BC 的 GPU 上，性能模式会将其开启。",
+-                "大型紋理不載入最精細的一級：紋理資料減少約 75%，近看略模糊。在不支援 BC 的 GPU 上，效能模式會將其開啟。");
++        put("tq_t", "Texture quality", "Qualité des textures", "Texturqualität", "Qualità delle texture",
++                "Calidad de texturas", "Qualidade das texturas", "Качество текстур", "テクスチャ品質", "텍스처 품질",
++                "纹理质量", "紋理品質");
++        put("tq_n",
++                "Lower quality loads lighter textures: less memory, less data to convert and sample, so the game runs faster (not just a different look). Down to 25%. Performance mode lowers it to 50% on GPUs without BC support.",
++                "Une qualité plus basse charge des textures plus légères : moins de mémoire, moins de données à convertir et à échantillonner, donc un jeu plus fluide (pas seulement un autre rendu). Jusqu'à 25 %. Le mode performance la baisse à 50 % sur les GPU sans BC.",
++                "Niedrigere Qualität lädt leichtere Texturen: weniger Speicher, weniger Daten zum Umwandeln und Abtasten, also läuft das Spiel schneller (nicht nur andere Optik). Bis hinunter zu 25 %. Der Leistungsmodus senkt sie auf GPUs ohne BC auf 50 %.",
++                "Una qualità più bassa carica texture più leggere: meno memoria, meno dati da convertire e campionare, quindi il gioco è più veloce (non solo un aspetto diverso). Fino al 25%. La modalità prestazioni la porta al 50% sulle GPU senza BC.",
++                "Menos calidad carga texturas más ligeras: menos memoria y menos datos que convertir y muestrear, así que el juego va más rápido (no es solo un cambio estético). Hasta el 25 %. El modo rendimiento la baja al 50 % en GPU sin BC.",
++                "Qualidade menor carrega texturas mais leves: menos memória e menos dados para converter e amostrar, então o jogo roda mais rápido (não é só estético). Até 25%. O modo desempenho reduz para 50% em GPUs sem BC.",
++                "Более низкое качество загружает более лёгкие текстуры: меньше памяти и данных для преобразования и выборки, поэтому игра работает быстрее (это не только внешний вид). До 25%. Режим производительности снижает до 50% на GPU без BC.",
++                "品質を下げるとより軽いテクスチャを読み込みます：メモリとデータ変換・サンプリング量が減り、ゲームが速くなります（見た目だけの変更ではありません）。最小 25%。BC 非対応 GPU ではパフォーマンスモードが 50% にします。",
++                "품질을 낮추면 더 가벼운 텍스처를 불러옵니다: 메모리와 변환·샘플링 데이터가 줄어 게임이 더 빨라집니다(단순한 외형 변화가 아닙니다). 최소 25%. BC를 지원하지 않는 GPU에서는 성능 모드가 50%로 낮춥니다.",
++                "较低的质量会加载更轻的纹理：占用更少内存，需要转换和采样的数据更少，游戏运行更快（不只是外观变化）。最低 25%。在不支持 BC 的 GPU 上，性能模式会将其降到 50%。",
++                "較低的品質會載入更輕的紋理：佔用更少記憶體，需要轉換和取樣的資料更少，遊戲執行更快（不只是外觀變化）。最低 25%。在不支援 BC 的 GPU 上，效能模式會將其降到 50%。");
++        put("tq_100", "Original", "Original", "Original", "Originale", "Original", "Original", "Оригинал", "オリジナル",
++                "원본", "原始", "原始");
++        put("tq_75", "Only the biggest textures at half resolution",
++                "Seules les plus grandes textures en demi-résolution",
++                "Nur die größten Texturen in halber Auflösung", "Solo le texture più grandi a metà risoluzione",
++                "Solo las texturas más grandes a media resolución", "Só as maiores texturas em meia resolução",
++                "Только самые большие текстуры в половинном разрешении", "最大級のテクスチャのみ半分の解像度",
++                "가장 큰 텍스처만 절반 해상도", "仅最大的纹理使用一半分辨率", "僅最大的紋理使用一半解析度");
++        put("tq_50", "Big textures at half resolution (about 75% less data)",
++                "Grandes textures en demi-résolution (environ 75 % de données en moins)",
++                "Große Texturen in halber Auflösung (etwa 75 % weniger Daten)",
++                "Texture grandi a metà risoluzione (circa il 75% di dati in meno)",
++                "Texturas grandes a media resolución (un 75 % menos de datos)",
++                "Texturas grandes em meia resolução (cerca de 75% menos dados)",
++                "Большие текстуры в половинном разрешении (примерно на 75% меньше данных)",
++                "大きなテクスチャを半分の解像度に（データ量は約 75% 減）",
++                "큰 텍스처를 절반 해상도로 (데이터 약 75% 감소)", "大纹理使用一半分辨率（数据减少约 75%）",
++                "大型紋理使用一半解析度（資料減少約 75%）");
++        put("tq_25", "Big textures at a quarter resolution (up to 94% less data)",
++                "Grandes textures au quart de la résolution (jusqu'à 94 % de données en moins)",
++                "Große Texturen in Viertelauflösung (bis zu 94 % weniger Daten)",
++                "Texture grandi a un quarto di risoluzione (fino al 94% di dati in meno)",
++                "Texturas grandes a un cuarto de resolución (hasta un 94 % menos de datos)",
++                "Texturas grandes em um quarto da resolução (até 94% menos dados)",
++                "Большие текстуры в четверть разрешения (до 94% меньше данных)",
++                "大きなテクスチャを 4 分の 1 の解像度に（データ量は最大 94% 減）",
++                "큰 텍스처를 1/4 해상도로 (데이터 최대 94% 감소)", "大纹理使用四分之一分辨率（数据最多减少 94%）",
++                "大型紋理使用四分之一解析度（資料最多減少 94%）");
+         put("malib_t", "Tile-GPU barriers (experimental)", "Barrières GPU à tuiles (expérimental)",
+                 "Kachel-GPU-Barrieren (experimentell)", "Barriere GPU a tile (sperimentale)",
+                 "Barreras para GPU por mosaicos (experimental)", "Barreiras para GPU em blocos (experimental)",
+diff -ruN a/docs/MALI_COMPATIBILITY_AUDIT.md b/docs/MALI_COMPATIBILITY_AUDIT.md
+--- a/docs/MALI_COMPATIBILITY_AUDIT.md	2026-11-23 06:10:37.064352927 +0000
++++ b/docs/MALI_COMPATIBILITY_AUDIT.md	2026-11-23 06:10:37.069076942 +0000
+@@ -12,11 +12,11 @@
+ 
+ - Frame pacing: `target_fps`, `dynamic_fps`, `min_fps`, `unlocked_fps`.
+ - Resolution: `render_width`, `render_height`, `render_scale` (documented range 0.5–1.0).
+-- Quality/performance: `performance_mode`, `lighter_post_fx`, `texture_mip_skip`, `max_anisotropy`, `exposure`.
++- Quality/performance: `performance_mode`, `lighter_post_fx`, `texture_quality`, `max_anisotropy`, `exposure`.
+ - Texture compatibility: `bc_etc2`, `bc3_etc2`, `gpu_compression`.
+ - Vulkan path switches: `mali_barriers`, `render_pass_objects`, `async_pipelines`, `record_thread`, `recorder_copies`, `staging_memory`.
+ 
+-The Android in-game `SettingsMenu` already has Graphics and Driver tabs. Its Graphics tab offers 30/45/60 FPS, auto/unlocked pacing, render scale, performance mode, lighter post effects, BC3-to-ETC2 conversion, mip skipping, and the Mali barrier option. The Driver tab supports the system driver, bundled Turnip Gen8, and user-imported ZIP/SO files.
++The Android in-game `SettingsMenu` already has Graphics and Driver tabs. Its Graphics tab offers 30/45/60 FPS, auto/unlocked pacing, render scale, performance mode, lighter post effects, BC3-to-ETC2 conversion, a texture quality slider (100% down to 25%), and the Mali barrier option. The Driver tab supports the system driver, bundled Turnip Gen8, and user-imported ZIP/SO files.
+ 
+ ### Important compatibility constraints
+ 
+diff -ruN a/docs/MALI_G57_FLICKER_AND_PERFORMANCE_DIAGNOSTICS.md b/docs/MALI_G57_FLICKER_AND_PERFORMANCE_DIAGNOSTICS.md
+--- a/docs/MALI_G57_FLICKER_AND_PERFORMANCE_DIAGNOSTICS.md	2026-11-23 06:10:37.064361683 +0000
++++ b/docs/MALI_G57_FLICKER_AND_PERFORMANCE_DIAGNOSTICS.md	2026-11-23 06:10:37.069084620 +0000
+@@ -37,7 +37,7 @@
+ - Driver: system.
+ - FPS cap: 30 (stable pacing baseline; not a claim that the device sustains 30).
+ - Present mode: FIFO.
+-- Performance mode: enabled (the current menu applies 0.75 render scale and lower-cost effects; on devices without BC sampling it also enables mip skipping).
++- Performance mode: enabled (the current menu applies 0.75 render scale and lower-cost effects; on devices without BC sampling it also lowers the texture quality to 50%).
+ - `render_pass_objects=1` for the diagnostic build/test only.
+ - `mali_barriers=0` until the render-pass fallback has been tested independently.
+ 
+diff -ruN a/docs/PERFORMANCE_OPTIONS_ROADMAP.md b/docs/PERFORMANCE_OPTIONS_ROADMAP.md
+--- a/docs/PERFORMANCE_OPTIONS_ROADMAP.md	2026-11-23 06:10:37.064379737 +0000
++++ b/docs/PERFORMANCE_OPTIONS_ROADMAP.md	2026-11-23 06:10:37.069099944 +0000
+@@ -16,7 +16,7 @@
+ - FPS cap: 30 / 45 / 60, automatic dynamic pacing, and experimental unlocked pacing.
+ - Render scale and performance preset.
+ - Reduced post-processing.
+-- Texture mip-level skip.
++- Texture quality slider (`texture_quality`, 25 / 50 / 75 / 100 %): big BC textures are loaded without their most detailed mip level(s), so they are never read, converted, uploaded or sampled. Less CPU work, GPU memory and bandwidth, not only a different look. Applied at the next start; each texture keeps at least 256 texels on its smaller side. Replaces the old on/off `texture_mip_skip` (a file with only that key is read as 50 %).
+ - BC3-to-ETC2 texture conversion where supported.
+ - Mali-specific barrier path and render-pass-object fallback.
+ - Presentation mode (FIFO / mailbox).
+diff -ruN a/src/hle/nvn/layout.cpp b/src/hle/nvn/layout.cpp
+--- a/src/hle/nvn/layout.cpp	2026-11-23 06:10:37.064753336 +0000
++++ b/src/hle/nvn/layout.cpp	2026-11-23 06:10:37.069584191 +0000
+@@ -52,6 +52,17 @@
+ }
+ }  // namespace
+ 
++int TextureMipSkip(const TextureState& tex, int levels, int quality) {
++    if (quality >= 100 || levels < 2) return 0;
++    int skip;
++    if (quality <= 37) skip = 2;
++    else if (quality <= 62) skip = 1;
++    else skip = std::max(tex.width, tex.height) >= 2048 ? 1 : 0;
++    const int small_side = std::min(tex.width, tex.height);
++    while (skip > 0 && (small_side >> skip) < 256) skip--;
++    return std::min(skip, levels - 1);
++}
++
+ TextureLayout ComputeLayout(const TextureState& t) {
+     TextureLayout out;
+     const FormatInfo fi = GetFormatInfo(t.format);
+diff -ruN a/src/hle/nvn/layout.h b/src/hle/nvn/layout.h
+--- a/src/hle/nvn/layout.h	2026-11-23 06:10:37.064760952 +0000
++++ b/src/hle/nvn/layout.h	2026-11-23 06:10:37.069594152 +0000
+@@ -37,6 +37,13 @@
+ 
+ TextureLayout ComputeLayout(const TextureState& t);
+ 
++// texture_quality (settings, 25..100 %): how many of a texture's most detailed mip levels are left out when it is
++// loaded (0 = load it whole). 25%: up to two levels (a quarter of the width and height, ~94% less data), 50%: one
++// level (~75% less data), 75%: one level for the biggest textures only (2048+ on a side); 100%: none. Values between
++// the menu's steps round to the nearest step. Whatever the quality, the smaller side keeps at least 256 texels (small
++// art and UI stay sharp) and at least one level is left (`levels` = the levels the texture has).
++int TextureMipSkip(const TextureState& tex, int levels, int quality);
++
+ // Converts one level of one layer between block-linear (src/dst at the level's offset) and tightly
+ // packed rows (row_bytes per row, rows per slice, depth slices).
+ void DeswizzleLevel(uint8_t* linear, const uint8_t* swizzled, const LevelLayout& l);
+diff -ruN a/src/hle/nvn/vk_backend.cpp b/src/hle/nvn/vk_backend.cpp
+--- a/src/hle/nvn/vk_backend.cpp	2026-11-23 06:10:37.064899229 +0000
++++ b/src/hle/nvn/vk_backend.cpp	2026-11-23 06:10:37.069732471 +0000
+@@ -554,7 +554,8 @@
+     // PassEndBarrier made this render target readable by fragment shaders only (mali_barriers); a vertex shader
+     // that samples it needs one more barrier first (VertexReadBarrier).
+     bool frag_only_sync = false;
+-    // texture_mip_skip: the game's level 0 was left out (this image holds its levels 1..n as 0..n-1, at half size).
++    // texture_quality: how many of the game's most detailed levels were left out (this image holds the game's levels
++    // mip_skip..n as 0..n-mip_skip, each skipped level halving the width and height).
+     int mip_skip = 0;
+     // Depth written by a fragment shader (gl_FragDepth) since the image was last attached: see LrzTouch.
+     bool depth_exported = false;
+@@ -1584,10 +1585,13 @@
+         LoadDeviceFunctions(device_);
+         ProbePatchedBc();
+         dsr::SetGpuHasBc(features_.textureCompressionBC || bc_forced_);
+-        mip_skip_ = dsr::GetRuntime().config.texture_mip_skip > 0;
++        tex_quality_ = std::clamp(dsr::GetRuntime().config.texture_quality, 25, 100);
++        mip_skip_ = tex_quality_ < 100;
+         load_skip_ = dsr::GetRuntime().config.pass_load_skip;
+         ChooseStagingMemory();
+-        if (mip_skip_) LOGI(kTag, "texture_mip_skip: big BC textures are loaded without their most detailed level");
++        if (mip_skip_) LOGI(kTag, "texture_quality %d%%: big BC textures are loaded without their %s", tex_quality_,
++                            tex_quality_ <= 37 ? "two most detailed levels" : tex_quality_ <= 62 ? "most detailed level"
++                                                                                                 : "most detailed level (only the biggest ones)");
+         if (const int rw = dsr::GetRuntime().config.render_width, rh = dsr::GetRuntime().config.render_height;
+             (rw != 1280 || rh != 720) && rw > 0 && rh > 0 && dsr::GetRuntime().config.hud_box) {
+             // The largest 16:9 box in the frame (the whole frame at 16:9, e.g. with a render scale).
+@@ -2372,15 +2376,17 @@
+         img.height = t.tex.height;
+         img.levels = std::max(1, std::min(t.tex.levels, int(layout.levels.size())));
+         img.layers = std::max(1, layout.layers);
+-        // texture_mip_skip: big BC textures (the game's art; never drawn into) without their most detailed level.
+-        if (mip_skip_ && BcKindOf(t.tex.format) != BcKind::None && img.levels >= 2 && t.tex.width >= 512 &&
+-            t.tex.height >= 512 && t.tex.target != kTarget3D && t.tex.target != kTarget1D &&
+-            t.tex.target != kTarget1DArray) {
+-            img.mip_skip = 1;
+-            img.width = std::max(1, t.tex.width >> 1);
+-            img.height = std::max(1, t.tex.height >> 1);
+-            img.levels -= 1;
+-            mip_skipped_++;
++        // texture_quality: big BC textures (the game's art; never drawn into) without their most detailed level(s).
++        if (mip_skip_ && BcKindOf(t.tex.format) != BcKind::None && t.tex.target != kTarget3D &&
++            t.tex.target != kTarget1D && t.tex.target != kTarget1DArray) {
++            const int skip = TextureMipSkip(t.tex, img.levels, tex_quality_);
++            if (skip > 0) {
++                img.mip_skip = skip;
++                img.width = std::max(1, t.tex.width >> skip);
++                img.height = std::max(1, t.tex.height >> skip);
++                img.levels -= skip;
++                mip_skipped_++;
++            }
+         }
+         img.depth = t.tex.target == kTarget3D ? std::max(1, t.tex.depth) : 1;
+         img.aspect = AspectOf(t.tex.format);
+@@ -2909,9 +2915,13 @@
+             default: type = array ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D; break;
+         }
+         // A texture view registered with the texture picks the first level/layer (and counts).
+-        const uint32_t base_level = ref ? SubLevel(img, ref->level - img.mip_skip) : 0;  // mip_skip: one level less
++        const uint32_t base_level = ref ? SubLevel(img, ref->level - img.mip_skip) : 0;  // mip_skip: levels less
+         uint32_t levels = uint32_t(img.levels) - base_level;
+-        if (ref && ref->view_levels > 0) levels = std::min<uint32_t>(levels, uint32_t(ref->view_levels));
++        if (ref && ref->view_levels > 0) {
++            // A view that started in a skipped level has that many levels fewer here.
++            const int lost = std::max(0, img.mip_skip - ref->level);
++            levels = std::min<uint32_t>(levels, uint32_t(std::max(1, ref->view_levels - lost)));
++        }
+         uint32_t base_layer = 0;
+         if (ref && img.type != VK_IMAGE_TYPE_3D && dim != shader::TexDim::Cube) base_layer = SubLayer(img, ref->layer);
+         if (array && dim != shader::TexDim::Cube) {
+@@ -6358,7 +6368,7 @@
+             }
+             LOGI(kTag, "memory: process %ld MB resident, %zu GPU images using %llu MB, %zu index ranges cached%s", rss_kb / 1024,
+                  images_.size(), (unsigned long long)(gpu >> 20), index_ranges_.size(),
+-                 mip_skip_ ? (", " + std::to_string(mip_skipped_) + " big textures without their top level").c_str() : "");
++                 mip_skip_ ? (", " + std::to_string(mip_skipped_) + " big textures at " + std::to_string(tex_quality_) + "% quality").c_str() : "");
+         }
+         if (big_checks_) {
+             LOGI(kTag, "game-written textures (>= 512x512): %llu checks, %llu changed and re-uploaded",
+@@ -6844,8 +6854,9 @@
+         return !full;
+     }
+     bool bc_patched_ = false, bc_forced_ = false;
+-    bool mip_skip_ = false;      // settings texture_mip_skip
+-    uint64_t mip_skipped_ = 0;   // images created without their top level
++    bool mip_skip_ = false;      // settings texture_quality < 100
++    int tex_quality_ = 100;      // settings texture_quality (25..100 %)
++    uint64_t mip_skipped_ = 0;   // images created without their top level(s)
+     int hud_box_w_ = 0, hud_box_h_ = 0;
+     std::unordered_set<uint64_t> hud_box_logged_;
+     uint64_t hud_full_screen_ = 0;
+diff -ruN a/src/platform/android/android_main.cpp b/src/platform/android/android_main.cpp
+--- a/src/platform/android/android_main.cpp	2026-11-23 06:10:37.065228370 +0000
++++ b/src/platform/android/android_main.cpp	2026-11-23 06:10:37.070068392 +0000
+@@ -441,7 +441,7 @@
+         }
+     } else {
+         bool have_present_mode = false, have_face_buttons = false, have_gpu_driver = false, have_bc_enabler = false;
+-        bool have_touch = false, have_aspect = false;
++        bool have_touch = false, have_aspect = false, have_texture_quality = false;
+         int settings_version = 1;
+         char line[256];
+         while (fgets(line, sizeof(line), f)) {
+@@ -526,6 +526,10 @@
+             else if (!strcmp(key, "mali_barriers")) cfg->mali_barriers = v != 0;
+             else if (!strcmp(key, "performance_mode")) cfg->performance_mode = v != 0;
+             else if (!strcmp(key, "texture_mip_skip")) cfg->texture_mip_skip = std::clamp(v, 0, 1);
++            else if (!strcmp(key, "texture_quality")) {
++                cfg->texture_quality = v <= 0 ? 100 : std::clamp(v, 25, 100);  // unreadable / 0: the original quality
++                have_texture_quality = true;
++            }
+             else if (!strcmp(key, "pass_load_skip")) cfg->pass_load_skip = v != 0;
+             else if (!strcmp(key, "staging_memory")) cfg->staging_memory = value;
+             else if (!strcmp(key, "recorder_copies")) cfg->recorder_copies = v != 0;
+@@ -540,6 +544,8 @@
+             }
+         }
+         fclose(f);
++        // Files from before the texture quality slider only have the on/off texture_mip_skip: that was 50%.
++        if (!have_texture_quality && cfg->texture_mip_skip > 0) cfg->texture_quality = 50;
+         // Version 2: the presentation default changed from mailbox to fifo. Files from before carry the old default
+         // (written by the app), so `present_mode = mailbox` there becomes fifo, once; a choice made later is kept.
+         if (settings_version < 2) {
+@@ -607,9 +613,9 @@
+          path.c_str(), cfg->target_fps, cfg->dynamic_fps ? " (auto)" : cfg->unlocked_fps ? " (unlocked)" : "", cfg->async_pipelines ? "on" : "off", cfg->auto_capture ? "on" : "off",
+          cfg->profile ? "on" : "off", cfg->gamma, cfg->exposure, cfg->present_mode.c_str(),
+          g_face_by_position ? "position" : "label");
+-    LOGI(kTag, "settings: gpu_driver %s, bc_enabler %d, language %s, render scale %.2f, shadow_compare %d, game_hooks %d, skip_intro %d, render_pass_objects %d, mali_barriers %d, performance_mode %d, texture_mip_skip %d, lighter_post_fx %d, present_mode %s, hole_test %d", cfg->gpu_driver.c_str(),
++    LOGI(kTag, "settings: gpu_driver %s, bc_enabler %d, language %s, render scale %.2f, shadow_compare %d, game_hooks %d, skip_intro %d, render_pass_objects %d, mali_barriers %d, performance_mode %d, texture_quality %d%%, lighter_post_fx %d, present_mode %s, hole_test %d", cfg->gpu_driver.c_str(),
+          int(cfg->bc_enabler), cfg->language.c_str(), cfg->render_scale, cfg->shadow_compare,
+-         int(cfg->game_hooks), int(cfg->skip_intro), int(cfg->render_pass_objects), int(cfg->mali_barriers), int(cfg->performance_mode), cfg->texture_mip_skip, int(cfg->lighter_post_fx), cfg->present_mode.c_str(),
++         int(cfg->game_hooks), int(cfg->skip_intro), int(cfg->render_pass_objects), int(cfg->mali_barriers), int(cfg->performance_mode), cfg->texture_quality, int(cfg->lighter_post_fx), cfg->present_mode.c_str(),
+          cfg->hole_test);
+     if (!g_custom_game_dir.empty()) LOGI(kTag, "settings: game_dir %s", g_custom_game_dir.c_str());
+     LOGI(kTag, "settings: touch controls %s, opacity %.2f, camera speed %.2f%s", g_touch.enabled ? "on" : "off",
+diff -ruN a/src/runtime/runtime.h b/src/runtime/runtime.h
+--- a/src/runtime/runtime.h	2026-11-23 06:10:37.065397433 +0000
++++ b/src/runtime/runtime.h	2026-11-23 06:10:37.070179844 +0000
+@@ -78,8 +78,15 @@
+     // performance_mode = 1: the engine's own lower-quality options: low-quality effects, 1024x1024 shadow maps instead
+     // of 2048x2048 (read at start-up). The menu also sets render_scale 0.75 when it is turned on.
+     bool performance_mode = false;
+-    // texture_mip_skip = 1: big BC textures (512x512 and up, with mip levels) are loaded without their most detailed
+-    // level: half the width and height, ~75% less data to convert, upload and sample; softer up close.
++    // texture_quality (25..100, in %): resolution of the game's big BC textures (the art; never drawn into). Levels
++    // that are left out are never read, converted, uploaded or sampled, so this saves CPU time, GPU memory and
++    // bandwidth (not only looks). 100 = original. 75 = the biggest textures (2048+ on a side) lose their most
++    // detailed level. 50 = every big texture loses it: half the width and height, ~75% less data. 25 = the two most
++    // detailed levels: a quarter of the width and height, ~94% less data. A texture always keeps at least 256 texels
++    // on its smaller side, so small art stays sharp. Read at start-up.
++    int texture_quality = 100;
++    // texture_mip_skip = 1: the old on/off switch (= texture_quality 50). Only read when settings.txt has no
++    // texture_quality line (files from before the slider).
+     int texture_mip_skip = 0;
+     // pass_load_skip = 0: render passes always load their targets (by default a pass learned to overwrite a target
+     // starts without loading it: vk_backend.cpp, PassCoverage).
+diff -ruN a/tests/runtime_tests.cpp b/tests/runtime_tests.cpp
+--- a/tests/runtime_tests.cpp	2026-11-23 06:10:37.065429283 +0000
++++ b/tests/runtime_tests.cpp	2026-11-23 06:10:37.070241444 +0000
+@@ -749,6 +749,53 @@
+     CHECK(!Validate({0xE0000000}).empty());              // unknown type
+ }
+ 
++// texture_quality: how many of the most detailed mip levels a texture loses.
++static void TestTextureQuality() {
++    using namespace dsr::hle::nvn;
++    auto tex = [](int w, int h) {
++        TextureState t;
++        t.width = w;
++        t.height = h;
++        return t;
++    };
++    // 100% (original) and textures without mips: nothing is left out.
++    CHECK(TextureMipSkip(tex(4096, 4096), 13, 100) == 0);
++    CHECK(TextureMipSkip(tex(2048, 2048), 1, 25) == 0);
++    // 50%: one level for textures whose smaller side stays >= 256 (512 and up).
++    CHECK(TextureMipSkip(tex(1024, 1024), 11, 50) == 1);
++    CHECK(TextureMipSkip(tex(512, 512), 10, 50) == 1);
++    CHECK(TextureMipSkip(tex(256, 256), 9, 50) == 0);
++    CHECK(TextureMipSkip(tex(2048, 256), 9, 50) == 0);
++    // 25%: two levels where the smaller side stays >= 256 (1024 and up), else one, else none.
++    CHECK(TextureMipSkip(tex(2048, 2048), 12, 25) == 2);
++    CHECK(TextureMipSkip(tex(1024, 1024), 11, 25) == 2);
++    CHECK(TextureMipSkip(tex(512, 512), 10, 25) == 1);
++    CHECK(TextureMipSkip(tex(2048, 512), 12, 25) == 1);
++    CHECK(TextureMipSkip(tex(256, 256), 9, 25) == 0);
++    // 75%: only the biggest textures (2048+ on a side), one level.
++    CHECK(TextureMipSkip(tex(4096, 4096), 13, 75) == 1);
++    CHECK(TextureMipSkip(tex(2048, 1024), 12, 75) == 1);
++    CHECK(TextureMipSkip(tex(1024, 1024), 11, 75) == 0);
++    // At least one level is always left.
++    CHECK(TextureMipSkip(tex(1024, 1024), 2, 25) == 1);
++    CHECK(TextureMipSkip(tex(1024, 1024), 1, 25) == 0);
++    // Values between the menu's steps round to the nearest; the result never grows as quality drops.
++    CHECK(TextureMipSkip(tex(2048, 2048), 12, 30) == 2);
++    CHECK(TextureMipSkip(tex(2048, 2048), 12, 40) == 1);
++    CHECK(TextureMipSkip(tex(2048, 2048), 12, 70) == 1);
++    for (int w : {256, 512, 1024, 2048, 4096})
++        for (int h : {256, 512, 1024, 2048, 4096})
++            for (int q = 100; q > 25; q -= 5)
++                CHECK(TextureMipSkip(tex(w, h), 13, q - 5) >= TextureMipSkip(tex(w, h), 13, q));
++    // The image that is left holds levels skip..n: its size matches the layout's level `skip`.
++    TextureState t = tex(2048, 2048);
++    t.format = 65;  // DXT1 (BC1)
++    t.levels = 12;
++    TextureLayout l = ComputeLayout(t);
++    const int skip = TextureMipSkip(t, t.levels, 25);
++    CHECK(skip == 2 && l.levels[size_t(skip)].width == 512 && l.levels[size_t(skip)].height == 512);
++}
++
+ int main() {
+     struct T { const char* name; void (*fn)(); } tests[] = {
+         {"lz4", TestLz4},
+@@ -759,6 +806,7 @@
+         {"nvn_commands", TestNvnCommands},
+         {"shader_translator", TestShaderTranslator},
+         {"block_linear", TestBlockLinear},
++        {"texture_quality", TestTextureQuality},
+         {"etc_encode", TestEtcEncode},
+         {"cheats", TestCheats},
+ #if defined(__aarch64__)

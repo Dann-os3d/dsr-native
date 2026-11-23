@@ -1,0 +1,97 @@
+name: Aplicar parche y compilar APK
+
+# Pon en la RAIZ del repositorio: texture_quality_slider.patch
+# (opcional, solo como respaldo: dsr-native-texture-quality.zip)
+# Se ejecuta solo al subir el parche, o a mano desde Actions > Run workflow.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'texture_quality_slider.patch'
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Aplicar el parche
+        run: |
+          set -e
+          PATCH=texture_quality_slider.patch
+          ZIP=dsr-native-texture-quality.zip
+          [ -f "$PATCH" ] || { echo "Falta $PATCH en la raiz del repositorio"; exit 1; }
+          if git apply --check -R "$PATCH" 2>/dev/null; then
+            echo "El parche ya estaba aplicado en este repositorio."
+          elif git apply --check "$PATCH" 2>/dev/null; then
+            git apply "$PATCH"
+            echo "Parche aplicado."
+          elif git apply --check --ignore-whitespace "$PATCH" 2>/dev/null; then
+            git apply --ignore-whitespace "$PATCH"
+            echo "Parche aplicado (ignorando espacios)."
+          elif [ -f "$ZIP" ]; then
+            echo "El parche no encaja; copio los archivos modificados desde el zip."
+            grep '^+++ b/' "$PATCH" | sed 's#^+++ b/##' | cut -f1 > /tmp/archivos.txt
+            mkdir /tmp/z && unzip -q "$ZIP" -d /tmp/z
+            RAIZ=$(ls /tmp/z | head -1)
+            while read -r f; do
+              mkdir -p "$(dirname "$f")"
+              cp "/tmp/z/$RAIZ/$f" "$f"
+              echo "  copiado $f"
+            done < /tmp/archivos.txt
+          else
+            echo "El parche no encaja con este repositorio y no hay zip de respaldo."
+            exit 1
+          fi
+
+      # Guarda el codigo ya modificado en la rama texture-quality de tu fork.
+      - name: Guardar los cambios en la rama texture-quality
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B texture-quality
+          git add -A
+          git commit -m "Add texture quality slider (25-100%)" || echo "Sin cambios nuevos que guardar."
+          git push --force origin texture-quality
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install NDK and CMake
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "ndk;26.1.10909125" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build APK
+        working-directory: android
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Preparar el APK
+        run: cp android/app/build/outputs/apk/debug/*.apk "dsr-native-texture-quality-${{ github.run_number }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsr-native-apk-${{ github.run_number }}
+          path: dsr-native-texture-quality-${{ github.run_number }}.apk
+          if-no-files-found: error
+
+      # El APK queda en la seccion Releases del repositorio: se descarga directo desde el movil.
+      - name: Publicar el APK en Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "texture-quality-${{ github.run_number }}" \
+            "dsr-native-texture-quality-${{ github.run_number }}.apk" \
+            --target texture-quality \
+            --title "APK con calidad de texturas (build ${{ github.run_number }})" \
+            --notes "Compilado automaticamente. Descarga el .apk e instalalo (solo moviles arm64)."
