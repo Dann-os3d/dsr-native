@@ -1795,10 +1795,17 @@ private:
     void WritePipelineCache() {
         const std::string path = PipelineCachePath();
         if (!pipeline_cache_ || path.empty()) return;
-        size_t n = 0;
-        if (vkGetPipelineCacheData(device_, pipeline_cache_, &n, nullptr) != VK_SUCCESS || !n) return;
-        std::vector<uint8_t> data(n);
-        if (vkGetPipelineCacheData(device_, pipeline_cache_, &n, data.data()) != VK_SUCCESS) return;
+        std::vector<uint8_t> data;
+        {
+            // The cache may still be updated by background pipeline compilers. Keep the size query and
+            // data read under the same lock so the allocation cannot become stale between the two calls.
+            std::lock_guard<std::mutex> lk(pipeline_cache_mutex_);
+            size_t n = 0;
+            if (vkGetPipelineCacheData(device_, pipeline_cache_, &n, nullptr) != VK_SUCCESS || !n) return;
+            data.resize(n);
+            if (vkGetPipelineCacheData(device_, pipeline_cache_, &n, data.data()) != VK_SUCCESS) return;
+            data.resize(n);
+        }
         const std::string tmp = path + ".tmp";
         if (FILE* f = fopen(tmp.c_str(), "wb")) {
             const bool ok = fwrite(data.data(), 1, n, f) == n;
@@ -5589,6 +5596,7 @@ private:
     struct PipelineJob {
         VkDevice device = VK_NULL_HANDLE;
         VkPipelineCache cache = VK_NULL_HANDLE;
+        std::mutex* cache_mutex = nullptr;  // VkPipelineCache host access is externally synchronized.
         VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
         std::vector<VkVertexInputBindingDescription> bindings;
         std::vector<VkVertexInputAttributeDescription> attributes;
@@ -5660,7 +5668,12 @@ private:
         ci.pColorBlendState = &cb;
         ci.pDynamicState = &dy;
         ci.layout = j.layout;
-        j.result = vkCreateGraphicsPipelines(j.device, j.cache, 1, &ci, nullptr, &j.pipeline);
+        if (j.cache && j.cache_mutex) {
+            std::lock_guard<std::mutex> lk(*j.cache_mutex);
+            j.result = vkCreateGraphicsPipelines(j.device, j.cache, 1, &ci, nullptr, &j.pipeline);
+        } else {
+            j.result = vkCreateGraphicsPipelines(j.device, j.cache, 1, &ci, nullptr, &j.pipeline);
+        }
         if (j.result != VK_SUCCESS) j.pipeline = VK_NULL_HANDLE;
         j.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         j.done.store(true, std::memory_order_release);
@@ -5773,6 +5786,7 @@ private:
         PipelineJob& j = *job;
         j.device = device_;
         j.cache = pipeline_cache_;
+        j.cache_mutex = pipeline_cache_ ? &pipeline_cache_mutex_ : nullptr;
         j.vs = vs->module;
         j.fs = fs->module;
         const bool has_fragment = fs->module != VK_NULL_HANDLE;
@@ -6892,6 +6906,8 @@ private:
     };
     FlatMap<IndexMemo> index_memo_;
     VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
+    // Serializes all host access to the shared Vulkan pipeline cache across compiler and save threads.
+    std::mutex pipeline_cache_mutex_;
     int new_pipelines_ = 0;
     double compile_ms_ = 0;
     std::unordered_set<uint64_t> viewport_keys_;
