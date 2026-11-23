@@ -54,7 +54,7 @@ struct GameBuild {
     // LOD level bias, 1 on the Switch, is left alone: at 2 nearby walls switched to low-detail models with gaps.)
     //   lowvfx_read:   ldrb w10, [x20, #0x599] reading "Enable Low Quality Vfx" (0) into the effect setup: becomes
     //                  mov w10, #1 (effects through the engine's low-quality resolve).
-    //   shadow_size:   the shadow map size global (debug menu "ShadwoMap Size", 512..2048, 2048): set to 1024
+    //   shadow_size:   the shadow map size global (debug menu "ShadwoMap Size", 512..2048, 2048): set to 512
     //                  before the game starts; the engine sizes the shadow target and its texel offsets from it.
     uint64_t lowvfx_read, shadow_size;
     // The per-frame dynamic buffer (DLDrawDevice_NXNvn: three, one per frame in flight): its size is
@@ -207,7 +207,7 @@ void ApplyGrazeFix(Runtime& rt, float* graze) {
     LOGI("hooks", "sprint frame-rate fix: the wall check and its slow-down follow the time step");
 }
 
-// Performance mode: low-quality effects, 1024x1024 shadow maps (see GameBuild); the menu also sets render scale 0.75.
+// Performance mode: low-quality effects, 512x512 shadow maps (see GameBuild); the menu also sets render scale 0.75.
 // Each part is checked before it is changed and is skipped (logged) if the game's code or data is not as expected.
 void ApplyPerformanceMode(Runtime& rt, const GameBuild& b) {
     constexpr uint32_t kLdrbLowVfx = 0x3956668A;    // ldrb w10, [x20, #0x599]
@@ -220,8 +220,8 @@ void ApplyPerformanceMode(Runtime& rt, const GameBuild& b) {
         LOGW("hooks", "performance mode: effects quality not changed (%s)", err.c_str());
     int32_t* shadow = reinterpret_cast<int32_t*>(rt.main.base() + b.shadow_size);
     if (rt.main.Contains(reinterpret_cast<uintptr_t>(shadow)) && *shadow == 2048) {
-        *shadow = 1024;
-        done += done.empty() ? "shadow maps 1024" : ", shadow maps 1024";
+        *shadow = 512;
+        done += done.empty() ? "shadow maps 512" : ", shadow maps 512";
     } else {
         LOGW("hooks", "performance mode: shadow map size not changed (found %d)",
              rt.main.Contains(reinterpret_cast<uintptr_t>(shadow)) ? *shadow : -1);
