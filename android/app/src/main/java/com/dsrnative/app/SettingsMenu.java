@@ -450,6 +450,7 @@ public final class SettingsMenu {
         toggle("performance_mode", Strings.t("perf_t"), Strings.t("perf_n") + " " + Strings.t("changes_next"), "1", "0",
                 "0");
         renderScale();  // performance mode sets 75%; it can be moved freely afterwards
+        textureQuality();
         toggle("lighter_post_fx", Strings.t("post_t"), Strings.t("post_n") + " " + Strings.t("changes_next"), "1", "0",
                 "0");
         toggle("lighting_lite", Strings.t("lighting_lite_t"), Strings.t("lighting_lite_n") + " "
@@ -719,6 +720,63 @@ public final class SettingsMenu {
                     popup(title, Strings.t("next_start", title));
                 else
                     Toast.makeText(mA, Strings.t("changes_next"), Toast.LENGTH_SHORT).show();
+            }
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(6);
+        mBody.addView(bar, lp);
+    }
+
+    // ---- texture quality -----------------------------------------------------------------------------------------
+
+    private void textureQuality() {
+        final String title = Strings.t("texture_quality_t");
+        TextView t = text(title, 15, TEXT, true);
+        t.setPadding(0, dp(10), 0, 0);
+        mBody.addView(t);
+        mBody.addView(text(Strings.t("texture_quality_n") + " " + Strings.t("changes_next"), 12, DIM, false));
+        final String[] labels = {Strings.t("texture_quality_original"), Strings.t("texture_quality_vhigh"),
+                Strings.t("texture_quality_high"), Strings.t("texture_quality_low"), Strings.t("texture_quality_min")};
+        int current = Math.max(0, Math.min(4, (int) parse(mValues.get("texture_quality"), 0)));
+        TextView value = text("", 14, GOLD, true);
+        value.setPadding(0, dp(6), 0, 0);
+        mBody.addView(value);
+        value.setText(labels[current] + "  ·  " + current + "/4");
+        SeekBar bar = new SeekBar(mA);
+        bar.setMax(4);
+        bar.setProgress(current);
+        bar.setFocusable(true);
+        bar.setPadding(dp(18), dp(12), dp(18), dp(12));
+        bar.setProgressTintList(ColorStateList.valueOf(GOLD));
+        bar.setThumbTintList(ColorStateList.valueOf(GOLD));
+        bar.setProgressBackgroundTintList(ColorStateList.valueOf(0xFF555555));
+        StateListDrawable bg = new StateListDrawable();
+        bg.addState(new int[] {android.R.attr.state_focused}, rounded(0xFF3A3A3A, 10, 0xFFFFFFFF));
+        bg.addState(new int[] {}, rounded(CARD, 10, 0));
+        bar.setBackground(bg);
+        final boolean[] touching = {false};
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            private void save(int level, boolean tell) {
+                String v = Integer.toString(level);
+                if (same(v, mValues.get("texture_quality"))
+                        || (!mValues.containsKey("texture_quality") && level == 0)) return;
+                if (!writeSetting("texture_quality", v)) {
+                    cantSave();
+                    return;
+                }
+                mValues.put("texture_quality", v);
+                if (tell) popup(title, Strings.t("next_start", title));
+                else Toast.makeText(mA, Strings.t("changes_next"), Toast.LENGTH_SHORT).show();
+            }
+            @Override public void onProgressChanged(SeekBar b, int progress, boolean fromUser) {
+                value.setText(labels[progress] + "  ·  " + progress + "/4");
+                if (fromUser && !touching[0]) save(progress, false);
+            }
+            @Override public void onStartTrackingTouch(SeekBar b) { touching[0] = true; }
+            @Override public void onStopTrackingTouch(SeekBar b) {
+                touching[0] = false;
+                save(b.getProgress(), true);
             }
         });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
