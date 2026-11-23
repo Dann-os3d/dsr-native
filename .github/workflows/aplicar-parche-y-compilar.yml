@@ -1,0 +1,145 @@
+name: Aplicar parche y compilar APK
+
+# Pon en la RAIZ del repositorio los archivos .patch (texture_quality_slider.patch, lighting_off.patch, ...).
+# Se aplican todos, en este orden: primero texture_quality_slider.patch y despues los demas por nombre.
+# Debe estar DENTRO de .github/workflows/ (si esta en la raiz, GitHub no lo ejecuta).
+# Se ejecuta solo al subir un .patch o este mismo archivo, o a mano desde Actions > Run workflow.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '*.patch'
+      - '.github/workflows/aplicar*.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Aplicar los parches
+        run: |
+          set -e
+          shopt -s nullglob
+          ORDEN=()
+          [ -f texture_quality_slider.patch ] && ORDEN+=(texture_quality_slider.patch)
+          for p in *.patch; do
+            [ "$p" = texture_quality_slider.patch ] || ORDEN+=("$p")
+          done
+          [ "${#ORDEN[@]}" -gt 0 ] || { echo "No hay ningun archivo .patch en la raiz del repositorio"; exit 1; }
+          # Si TODOS los parches ya estan en el codigo (p. ej. si fusionaste la rama en main), no hay nada que aplicar.
+          # Se comprueba deshaciendolos en orden inverso sobre una copia temporal.
+          RAIZ="$PWD"
+          rm -rf /tmp/rev && cp -a "$RAIZ" /tmp/rev
+          TODOS=1
+          for ((i=${#ORDEN[@]}-1; i>=0; i--)); do
+            (cd /tmp/rev && git apply -R "$RAIZ/${ORDEN[i]}") 2>/dev/null || { TODOS=0; break; }
+          done
+          rm -rf /tmp/rev
+          if [ "$TODOS" = 1 ]; then
+            echo "Todos los parches ya estaban aplicados en este repositorio."
+            ORDEN=()
+          fi
+          for PATCH in "${ORDEN[@]}"; do
+            echo "== $PATCH"
+            if git apply --check -R "$PATCH" 2>/dev/null; then
+              echo "   ya estaba aplicado"
+            elif git apply --check "$PATCH" 2>/dev/null; then
+              git apply "$PATCH"
+              echo "   aplicado"
+            elif git apply --check --ignore-whitespace "$PATCH" 2>/dev/null; then
+              git apply --ignore-whitespace "$PATCH"
+              echo "   aplicado (ignorando espacios)"
+            else
+              echo "   ERROR: no encaja con este repositorio."
+              echo "   Comprueba que subiste TAMBIEN los parches anteriores (lighting_off.patch necesita texture_quality_slider.patch)."
+              git apply --check "$PATCH" || true
+              exit 1
+            fi
+          done
+
+      # Guarda el codigo ya modificado en la rama parches-aplicados de tu fork.
+      - name: Guardar los cambios en la rama parches-aplicados
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B parches-aplicados
+          git add -A
+          git commit -m "Aplicar parches (texturas, iluminacion)" || echo "Sin cambios nuevos que guardar."
+          git push --force origin parches-aplicados
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install NDK and CMake
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "ndk;26.1.10909125" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      # Comprueba que los cambios de cada parche estan de verdad en el codigo que se va a compilar.
+      - name: Comprobar que los cambios estan en el codigo
+        run: |
+          MENU=android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
+          if [ -f texture_quality_slider.patch ]; then
+            grep -q 'private void textureQuality()' "$MENU" || { echo "FALTA el deslizador de texturas en el codigo"; exit 1; }
+            echo "OK: deslizador de calidad de texturas presente"
+          fi
+          if [ -f lighting_off.patch ]; then
+            grep -q '"lighting_off"' "$MENU" || { echo "FALTA el boton de sombras en el codigo"; exit 1; }
+            echo "OK: boton Sin sombras ni efectos de luz presente"
+          fi
+
+      # El numero de version sale del contador de ESTE workflow (empieza en 1), asi que Android podria rechazar el APK
+      # como "version anterior" si ya tenias instalado otro de mayor numero. Se usa la hora (minutos) para que siempre sea
+      # la mas alta, y el nombre de version lleva "-parches" para reconocer este APK en Ajustes > Apps.
+      - name: Numero de version (siempre mayor)
+        run: |
+          python3 - <<'PY'
+          import time
+          p = 'android/app/build.gradle'
+          s = open(p).read()
+          n = int(time.time() // 60)
+          a = "versionCode((System.getenv('GITHUB_RUN_NUMBER') ?: '1') as int)"
+          b = 'versionName "0.1.${System.getenv(\'GITHUB_RUN_NUMBER\') ?: \'0\'}"'
+          assert a in s, "no encuentro versionCode en build.gradle"
+          s = s.replace(a, "versionCode(%d)" % n)
+          if b in s:
+              s = s.replace(b, b[:-1] + '-parches"')
+          open(p, 'w').write(s)
+          print("versionCode =", n)
+          PY
+          grep -n "versionCode\|versionName" android/app/build.gradle
+
+      - name: Build APK
+        working-directory: android
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Preparar el APK
+        run: cp android/app/build/outputs/apk/debug/*.apk "dsr-native-${{ github.run_number }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsr-native-apk-${{ github.run_number }}
+          path: dsr-native-${{ github.run_number }}.apk
+          if-no-files-found: error
+
+      # El APK queda en la seccion Releases del repositorio: se descarga directo desde el movil.
+      - name: Publicar el APK en Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-${{ github.run_number }}" \
+            "dsr-native-${{ github.run_number }}.apk" \
+            --target parches-aplicados \
+            --title "APK con parches (build ${{ github.run_number }})" \
+            --notes "Compilado automaticamente. Descarga el .apk e instalalo (solo moviles arm64). En Ajustes > Apps la version termina en -parches."
