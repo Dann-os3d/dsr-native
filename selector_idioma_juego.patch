@@ -123,44 +123,51 @@ index 21c7fa1..b4bf811 100644
          put("lang_n", "The game's text and this menu. The menu changes at once; the game at its next start.",
                  "Les textes du jeu et ce menu. Le menu change immédiatement ; le jeu au prochain lancement.",
 diff --git a/src/platform/android/android_main.cpp b/src/platform/android/android_main.cpp
-index cf0dc7a..fd0f8c0 100644
+index cf0dc7a..3f592fb 100644
 --- a/src/platform/android/android_main.cpp
 +++ b/src/platform/android/android_main.cpp
-@@ -443,6 +443,7 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
-         bool have_present_mode = false, have_face_buttons = false, have_gpu_driver = false, have_bc_enabler = false;
-         bool have_touch = false, have_aspect = false;
-         int settings_version = 1;
-+        std::string game_language;  // settings game_language: the game's language when it differs from the menu's
-         char line[256];
-         while (fgets(line, sizeof(line), f)) {
-             char key[64], value[64];
-@@ -481,6 +482,7 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
-                 if (known) cfg->language = value;
-                 else LOGW(kTag, "settings: unknown language '%s': using %s", value, cfg->language.c_str());
+@@ -384,6 +384,20 @@ bool SaveSetting(const std::string& path, const std::string& key, const std::str
+     return ok;
+ }
+ 
++// The game_language line of settings.txt (the Language tab's "game language"): a language code, or "" for the same
++// language as the menu (no line, or "auto").
++std::string GameLanguageSetting(const std::string& path) {
++    std::string out;
++    if (FILE* f = fopen(path.c_str(), "r")) {
++        char line[256], key[64], value[64];
++        while (fgets(line, sizeof(line), f))
++            if (line[0] != '#' && sscanf(line, " %63[a-z_0-9] = %63s", key, value) == 2 && !strcmp(key, "game_language"))
++                out = value;
++        fclose(f);
++    }
++    return out == "auto" ? std::string() : out;
++}
++
+ // settings.txt beside the game folder: "key = value" lines, '#' comments. Written with defaults if missing.
+ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
+     FILE* f = fopen(path.c_str(), "r");
+@@ -478,8 +492,21 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
+                                                          "zh-CN", "zh-TW", "en-GB", "fr-CA", "es-419"};
+                 bool known = false;
+                 for (const char* code : kLanguages) known = known || !strcmp(code, value);
+-                if (known) cfg->language = value;
+-                else LOGW(kTag, "settings: unknown language '%s': using %s", value, cfg->language.c_str());
++                // A game_language line decides what the game is told; `language` then only is the menu's language.
++                if (known && GameLanguageSetting(path).empty()) cfg->language = value;
++                else if (!known) LOGW(kTag, "settings: unknown language '%s': using %s", value, cfg->language.c_str());
++            }
++            else if (!strcmp(key, "game_language")) {
++                static const char* const kGameLanguages[] = {"en-US", "fr", "de", "it", "es", "pt", "ru", "ja", "ko",
++                                                             "zh-CN", "zh-TW", "en-GB", "fr-CA", "es-419"};
++                bool known = false;
++                for (const char* code : kGameLanguages) known = known || !strcmp(code, value);
++                if (known) {
++                    cfg->language = value;
++                    LOGI(kTag, "settings: game_language %s (the game is told this language, whatever the menu uses)", value);
++                } else if (strcmp(value, "auto") != 0) {
++                    LOGW(kTag, "settings: unknown game_language '%s': using %s", value, cfg->language.c_str());
++                }
              }
-+            else if (!strcmp(key, "game_language")) game_language = value;
              else if (!strcmp(key, "bc_etc2")) cfg->bc_etc2 = v != 0;
              else if (!strcmp(key, "bc3_etc2")) cfg->bc3_etc2 = v != 0;
-             else if (!strcmp(key, "aspect_ratio")) {
-@@ -540,6 +542,21 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
-             }
-         }
-         fclose(f);
-+        // game_language (settings menu, Language tab) wins over `language` for what the game is told; "auto" or a
-+        // missing line = the same language as the menu.
-+        if (!game_language.empty() && game_language != "auto") {
-+            static const char* const kGameLanguages[] = {"en-US", "fr", "de", "it", "es", "pt", "ru", "ja", "ko",
-+                                                         "zh-CN", "zh-TW", "en-GB", "fr-CA", "es-419"};
-+            bool known = false;
-+            for (const char* code : kGameLanguages) known = known || game_language == code;
-+            if (known) {
-+                cfg->language = game_language;
-+                LOGI(kTag, "settings: game_language %s (the menu's language setting is not used for the game)",
-+                     game_language.c_str());
-+            } else {
-+                LOGW(kTag, "settings: unknown game_language '%s': using %s", game_language.c_str(), cfg->language.c_str());
-+            }
-+        }
-         // Version 2: the presentation default changed from mailbox to fifo. Files from before carry the old default
-         // (written by the app), so `present_mode = mailbox` there becomes fifo, once; a choice made later is kept.
-         if (settings_version < 2) {
