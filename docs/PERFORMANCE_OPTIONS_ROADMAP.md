@@ -16,7 +16,7 @@ These are candidates for clearer grouping and better descriptions in the existin
 - FPS cap: 30 / 45 / 60, automatic dynamic pacing, and experimental unlocked pacing.
 - Render scale and performance preset.
 - Reduced post-processing.
-- Texture mip-level skip.
+- Texture quality slider (`texture_quality`, 25 / 50 / 75 / 100 %): big BC textures are loaded without their most detailed mip level(s), so they are never read, converted, uploaded or sampled. Less CPU work, GPU memory and bandwidth, not only a different look. Applied at the next start; each texture keeps at least 256 texels on its smaller side. Replaces the old on/off `texture_mip_skip` (a file with only that key is read as 50 %).
 - BC3-to-ETC2 texture conversion where supported.
 - Mali-specific barrier path and render-pass-object fallback.
 - Presentation mode (FIFO / mailbox).
