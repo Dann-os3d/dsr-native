@@ -675,8 +675,9 @@ void InstallGameHooks() {
     if (rt.config.skip_intro) SkipIntroLogos(rt, b);
     // The experimental preset reuses only engine switches already identified and validated for this build.
     // It is deliberately not described as full lighting/shadow shutdown: shadow rendering remains active.
-    if (rt.config.lighting_lite) {
-        LOGI("hooks", "lighting_lite: applying verified reduced-effects preset");
+    // lighting_off adds the shadow-pass suppression of the Vulkan backend (not a game patch) to the same preset.
+    if (rt.config.lighting_lite || rt.config.lighting_off) {
+        LOGI("hooks", "%s: applying verified reduced-effects preset", rt.config.lighting_off ? "lighting_off" : "lighting_lite");
         ApplyPerformanceMode(rt, b);
         ApplyLighterPostFx(rt, b);
     } else {

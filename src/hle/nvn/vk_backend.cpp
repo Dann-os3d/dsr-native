@@ -50,6 +50,7 @@
 #include "hle/nvn/parallel.h"
 #include "runtime/runtime.h"
 #include "hle/nvn/layout.h"
+#include "hle/nvn/shadow_pass.h"
 #include "hle/os/os.h"
 #include "hle/nvn/shader/translator.h"
 #include "hle/nvn/state.h"
@@ -554,7 +555,8 @@ struct Image {
     // PassEndBarrier made this render target readable by fragment shaders only (mali_barriers); a vertex shader
     // that samples it needs one more barrier first (VertexReadBarrier).
     bool frag_only_sync = false;
-    // texture_mip_skip: the game's level 0 was left out (this image holds its levels 1..n as 0..n-1, at half size).
+    // texture_quality: how many of the game's most detailed levels were left out (this image holds the game's levels
+    // mip_skip..n as 0..n-mip_skip, each skipped level halving the width and height).
     int mip_skip = 0;
     // Depth written by a fragment shader (gl_FragDepth) since the image was last attached: see LrzTouch.
     bool depth_exported = false;
@@ -1584,10 +1586,15 @@ private:
         LoadDeviceFunctions(device_);
         ProbePatchedBc();
         dsr::SetGpuHasBc(features_.textureCompressionBC || bc_forced_);
-        mip_skip_ = dsr::GetRuntime().config.texture_mip_skip > 0;
+        tex_quality_ = std::clamp(dsr::GetRuntime().config.texture_quality, 25, 100);
+        mip_skip_ = tex_quality_ < 100;
+        lighting_off_ = dsr::GetRuntime().config.lighting_off;
         load_skip_ = dsr::GetRuntime().config.pass_load_skip;
         ChooseStagingMemory();
-        if (mip_skip_) LOGI(kTag, "texture_mip_skip: big BC textures are loaded without their most detailed level");
+        if (lighting_off_) LOGI(kTag, "lighting_off: shadow map passes are not drawn and the shadow lookups say \"lit\"");
+        if (mip_skip_) LOGI(kTag, "texture_quality %d%%: big BC textures are loaded without their %s", tex_quality_,
+                            tex_quality_ <= 37 ? "two most detailed levels" : tex_quality_ <= 62 ? "most detailed level"
+                                                                                                 : "most detailed level (only the biggest ones)");
         if (const int rw = dsr::GetRuntime().config.render_width, rh = dsr::GetRuntime().config.render_height;
             (rw != 1280 || rh != 720) && rw > 0 && rh > 0 && dsr::GetRuntime().config.hud_box) {
             // The largest 16:9 box in the frame (the whole frame at 16:9, e.g. with a render scale).
@@ -2372,15 +2379,17 @@ private:
         img.height = t.tex.height;
         img.levels = std::max(1, std::min(t.tex.levels, int(layout.levels.size())));
         img.layers = std::max(1, layout.layers);
-        // texture_mip_skip: big BC textures (the game's art; never drawn into) without their most detailed level.
-        if (mip_skip_ && BcKindOf(t.tex.format) != BcKind::None && img.levels >= 2 && t.tex.width >= 512 &&
-            t.tex.height >= 512 && t.tex.target != kTarget3D && t.tex.target != kTarget1D &&
-            t.tex.target != kTarget1DArray) {
-            img.mip_skip = 1;
-            img.width = std::max(1, t.tex.width >> 1);
-            img.height = std::max(1, t.tex.height >> 1);
-            img.levels -= 1;
-            mip_skipped_++;
+        // texture_quality: big BC textures (the game's art; never drawn into) without their most detailed level(s).
+        if (mip_skip_ && BcKindOf(t.tex.format) != BcKind::None && t.tex.target != kTarget3D &&
+            t.tex.target != kTarget1D && t.tex.target != kTarget1DArray) {
+            const int skip = TextureMipSkip(t.tex, img.levels, tex_quality_);
+            if (skip > 0) {
+                img.mip_skip = skip;
+                img.width = std::max(1, t.tex.width >> skip);
+                img.height = std::max(1, t.tex.height >> skip);
+                img.levels -= skip;
+                mip_skipped_++;
+            }
         }
         img.depth = t.tex.target == kTarget3D ? std::max(1, t.tex.depth) : 1;
         img.aspect = AspectOf(t.tex.format);
@@ -2909,9 +2918,13 @@ private:
             default: type = array ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D; break;
         }
         // A texture view registered with the texture picks the first level/layer (and counts).
-        const uint32_t base_level = ref ? SubLevel(img, ref->level - img.mip_skip) : 0;  // mip_skip: one level less
+        const uint32_t base_level = ref ? SubLevel(img, ref->level - img.mip_skip) : 0;  // mip_skip: levels less
         uint32_t levels = uint32_t(img.levels) - base_level;
-        if (ref && ref->view_levels > 0) levels = std::min<uint32_t>(levels, uint32_t(ref->view_levels));
+        if (ref && ref->view_levels > 0) {
+            // A view that started in a skipped level has that many levels fewer here.
+            const int lost = std::max(0, img.mip_skip - ref->level);
+            levels = std::min<uint32_t>(levels, uint32_t(std::max(1, ref->view_levels - lost)));
+        }
         uint32_t base_layer = 0;
         if (ref && img.type != VK_IMAGE_TYPE_3D && dim != shader::TexDim::Cube) base_layer = SubLayer(img, ref->layer);
         if (array && dim != shader::TexDim::Cube) {
@@ -2986,6 +2999,8 @@ private:
                 case 3: ci.compareOp = VK_COMPARE_OP_NEVER; break;
                 default: break;
             }
+            // lighting_off: nothing is in shadow, whatever the (undrawn) shadow map holds.
+            if (lighting_off_) ci.compareOp = VK_COMPARE_OP_NEVER;
         }
         ci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
         VkSampler smp = VK_NULL_HANDLE;
@@ -4568,6 +4583,17 @@ private:
         if (dsr::GetRuntime().config.hole_test & 512)
             while (!colors.empty() && !colors.back()) colors.pop_back();
         if (depth && !IsDepthFormat(depth->nvn_format)) depth = nullptr;
+
+        // lighting_off: shadow maps are not drawn. The pass is dropped before its render pass starts (no depth
+        // load / store, no vertex work for the casters); the sampler says "lit" whatever the map holds.
+        if (lighting_off_ && depth && layers_ok(*depth) &&
+            IsShadowMapPass(depth->width, depth->height, st_.program[1] != nullptr,
+                            int(std::count_if(colors.begin(), colors.end(), [](const Image* c) { return c != nullptr; })))) {
+            if (shadow_draws_skipped_++ == 0)
+                LOGI(kTag, "lighting_off: first shadow map pass skipped (depth image %dx%d)", depth->width, depth->height);
+            depth->clear_pending = false;  // the game's per-frame clear of the map: nothing reads it, so it is not made
+            return;
+        }
 
         Begin();
         // Keep enough streaming space for this draw so nothing allocated below is lost to a flush.
@@ -6358,7 +6384,9 @@ private:
             }
             LOGI(kTag, "memory: process %ld MB resident, %zu GPU images using %llu MB, %zu index ranges cached%s", rss_kb / 1024,
                  images_.size(), (unsigned long long)(gpu >> 20), index_ranges_.size(),
-                 mip_skip_ ? (", " + std::to_string(mip_skipped_) + " big textures without their top level").c_str() : "");
+                 mip_skip_ ? (", " + std::to_string(mip_skipped_) + " big textures at " + std::to_string(tex_quality_) + "% quality").c_str() : "");
+            if (lighting_off_)
+                LOGI(kTag, "lighting_off: %llu shadow map draws skipped", (unsigned long long)shadow_draws_skipped_);
         }
         if (big_checks_) {
             LOGI(kTag, "game-written textures (>= 512x512): %llu checks, %llu changed and re-uploaded",
@@ -6844,8 +6872,12 @@ private:
         return !full;
     }
     bool bc_patched_ = false, bc_forced_ = false;
-    bool mip_skip_ = false;      // settings texture_mip_skip
-    uint64_t mip_skipped_ = 0;   // images created without their top level
+    bool mip_skip_ = false;      // settings texture_quality < 100
+    int tex_quality_ = 100;      // settings texture_quality (25..100 %)
+    uint64_t mip_skipped_ = 0;   // images created without their top level(s)
+    bool lighting_off_ = false;  // settings lighting_off
+    uint64_t shadow_draws_skipped_ = 0;  // draws dropped from shadow map passes (lighting_off)
+    static bool layers_ok(const Image& d) { return d.layers <= 1 && d.depth <= 1; }
     int hud_box_w_ = 0, hud_box_h_ = 0;
     std::unordered_set<uint64_t> hud_box_logged_;
     uint64_t hud_full_screen_ = 0;

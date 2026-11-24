@@ -89,3 +89,14 @@ The Lighting-lite preset now selects 512x512 shadow maps instead of 1024x1024. T
 ### Stage B investigation — current limitation
 
 The current hook metadata exposes a validated shadow-map size global and a separate LightShaft draw-group switch, but it does not expose a verified shadow-pass enable flag or a complete list of shadow-pass dependencies. The Vulkan backend source handles generic image transitions and render-pass execution; it does not provide a game-specific semantic switch for the shadow pass. Therefore, disabling shadows by suppressing generic Vulkan passes or guessing another game-code offset would be unsafe and is not being committed. A real Stage B patch requires disassembly of the exact supported game binaries/build IDs and confirmation of the pass mask, resource lifetime, and frame-to-frame shadow target behavior.
+
+
+### Stage B (backend) — `lighting_off`: shadow passes are not drawn
+
+The Vulkan backend can do what the game binary could not be audited for. A shadow map is a depth-only pass (no pixel program, no colour target) into a square, power-of-two depth image of 512..2048 pixels (the engine's `ShadwoMap Size` range; 2048 raw is the 16 MB depth image the backend already sizes for). With `lighting_off = 1` such a pass is dropped in `Draw`, before its render pass starts, and the shadow samplers use `VK_COMPARE_OP_NEVER` (the same result as the `shadow_compare = 3` diagnostic: "lit"), whatever the undrawn map holds. The detection is a pure function (`IsShadowMapPass`, `hle/nvn/shadow_pass.h`) with host tests.
+
+`lighting_off` also applies everything `lighting_lite` does (low-quality effects, 512 shadow maps as a fallback if a pass is not recognised, no ambient occlusion / depth of field / camera motion blur / light shafts).
+
+What it does **not** do: direct, ambient and probe lighting inside the objects' own shaders stay as they are. There is still no verified game-code switch for them, and this feature deliberately adds no unverified offsets.
+
+Validation still needed on a device: that no square depth-only pass other than the shadow map exists (the log prints the size of the first skipped pass: `lighting_off: first shadow map pass skipped (depth image WxH)`; anything other than 2048/1024/512 square is a misdetection), no flicker or black frames, and the FPS difference with the setting OFF/ON. The setting is read at start-up and is OFF by default.

@@ -719,11 +719,6 @@ public final class TouchControls extends View implements InputManager.InputDevic
             return true;
         }
         final int action = e.getActionMasked();
-        if ((action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN)
-                && quickSettingsHit(e.getX(e.getActionIndex()), e.getY(e.getActionIndex()))) {
-            SettingsMenu.show(mActivity);
-            return true;
-        }
         if (!mShown) {
             if (action == MotionEvent.ACTION_DOWN) checkDoubleTap(e.getX(), e.getY());
             return true;
@@ -886,44 +881,11 @@ public final class TouchControls extends View implements InputManager.InputDevic
         nativeState(bits, lx, ly, rx, ry);
     }
 
-    // A small, always-visible shortcut in the top-right corner. It is deliberately outside
-    // the editable game-control layout and remains available when touch controls are hidden.
-    private boolean quickSettingsHit(float x, float y) {
-        float size = 46f * mDensity;
-        float margin = 14f * mDensity;
-        // The upper corners are occupied by ZL/ZR; use the clear lower-center area.
-        float cx = getWidth() / 2f;
-        float cy = getHeight() - margin - size / 2f;
-        float radius = size * 0.62f;
-        float dx = x - cx, dy = y - cy;
-        return dx * dx + dy * dy <= radius * radius;
-    }
-
-    private void drawQuickSettingsButton(Canvas c) {
-        if (getWidth() <= 0 || getHeight() <= 0) return;
-        float size = 46f * mDensity;
-        float margin = 14f * mDensity;
-        // The upper corners are occupied by ZL/ZR; use the clear lower-center area.
-        float cx = getWidth() / 2f;
-        float cy = getHeight() - margin - size / 2f;
-        mFill.setColor(0xB8202020);
-        c.drawCircle(cx, cy, size / 2f, mFill);
-        mStroke.setStrokeWidth(1.5f * mDensity);
-        mStroke.setColor(0xD0FFFFFF);
-        c.drawCircle(cx, cy, size / 2f, mStroke);
-        mText.setColor(0xFFFFFFFF);
-        mText.setTextSize(25f * mDensity);
-        c.drawText("⚙", cx, cy - (mText.ascent() + mText.descent()) / 2f, mText);
-    }
-
     // ---- drawing --------------------------------------------------------------------------------------------
 
     @Override
     protected void onDraw(Canvas c) {
-        if (!mShown) {
-            drawQuickSettingsButton(c);
-            return;
-        }
+        if (!mShown) return;
         if (mEditing) c.drawColor(0x50000000);
         // Stick (the knob stays inside the ring).
         final float bx = mStickBaseX, by = mStickBaseY;
@@ -979,7 +941,5 @@ public final class TouchControls extends View implements InputManager.InputDevic
             mText.setTextSize(size);
         }
         if (mEditing) drawEditor(c);
-        // Draw last so the shortcut stays above every touch-control button.
-        drawQuickSettingsButton(c);
     }
 }
