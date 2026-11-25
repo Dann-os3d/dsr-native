@@ -1,0 +1,1075 @@
+diff --git a/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java b/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
+index 6ee3818..3486ba7 100644
+--- a/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
++++ b/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
+@@ -457,12 +457,58 @@ public final class SettingsMenu {
+         toggle("lighting_lite", Strings.t("lighting_lite_t"), Strings.t("lighting_lite_n") + " "
+                 + Strings.t("changes_next"), "1", "0", "0");
+         toggle("lighting_off", Strings.t("lo_t"), Strings.t("lo_n") + " " + Strings.t("changes_next"), "1", "0", "0");
++        choice("shadow_quality", Strings.t("shq_t"), Strings.t("shq_n") + " " + Strings.t("changes_next"),
++                new String[] {"0", "1", "2", "3"},
++                new String[] {Strings.t("shq_off"), Strings.t("shq_low"), Strings.t("shq_med"), Strings.t("shq_high")}, "3");
++        choice("anisotropy", Strings.t("aniso_t"), Strings.t("aniso_n") + " " + Strings.t("changes_next"),
++                new String[] {"-1", "0", "2", "4", "8", "16"},
++                new String[] {Strings.t("aniso_game"), Strings.t("off"), "2x", "4x", "8x", "16x"}, "-1");
+ 
+         section(Strings.t("sec_gpu"));
+         note(Strings.t("gpu_n"));
+         toggle("bc3_etc2", Strings.t("bc3_t"), Strings.t("bc3_n") + " " + Strings.t("changes_next"), "1", "0", "0");
+         toggle("mali_barriers", Strings.t("malib_t"), Strings.t("malib_n") + " " + Strings.t("changes_next"), "1", "0",
+                 "0");
++        toggle("mali_tile_turbo", Strings.t("turbo_t"), Strings.t("turbo_n") + " " + Strings.t("changes_next"), "1", "0",
++                "0");
++        toggle("skip_prepass", Strings.t("prepass_t"), Strings.t("prepass_n") + " " + Strings.t("changes_next"), "1", "0",
++                "0");
++        choice("skip_hidden", Strings.t("hidden_t"), Strings.t("hidden_n") + " " + Strings.t("changes_next"),
++                new String[] {"0", "1", "2"},
++                new String[] {Strings.t("off"), Strings.t("hidden_gentle"), Strings.t("hidden_aggr")}, "0");
++        choice("geo_cache_mb", Strings.t("geo_t"), Strings.t("geo_n") + " " + Strings.t("changes_next"),
++                new String[] {"192", "128", "96", "64"}, new String[] {"192 MB", "128 MB", "96 MB", "64 MB"}, "192");
++
++        section(Strings.t("mali_preset_t"));
++        note(Strings.t("mali_preset_n"));
++        presetRow(Strings.t("mali_preset_apply"), MALI_PRESET);
++        presetRow(Strings.t("mali_preset_reset"), MALI_DEFAULTS);
++    }
++
++    // One tap for Mali GPUs (and the way back): the settings of the Mali options in one go.
++    private static final String[][] MALI_PRESET = {{"mali_tile_turbo", "1"}, {"skip_prepass", "1"}, {"skip_hidden", "1"},
++            {"shadow_quality", "2"}, {"anisotropy", "4"}, {"geo_cache_mb", "128"}};
++    private static final String[][] MALI_DEFAULTS = {{"mali_tile_turbo", "0"}, {"skip_prepass", "0"}, {"skip_hidden", "0"},
++            {"shadow_quality", "3"}, {"anisotropy", "-1"}, {"geo_cache_mb", "192"}};
++
++    private void presetRow(String label, final String[][] values) {
++        final TextView row = chip(label, false);
++        row.setGravity(Gravity.CENTER);
++        row.setOnClickListener(v -> {
++            for (String[] kv : values) {
++                if (!writeSetting(kv[0], kv[1])) {
++                    cantSave();
++                    return;
++                }
++                mValues.put(kv[0], kv[1]);
++            }
++            showTab(TAB_GRAPHICS);
++            popup(Strings.t("mali_preset_t"), Strings.t("mali_preset_done"));
++        });
++        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
++                ViewGroup.LayoutParams.WRAP_CONTENT);
++        lp.topMargin = dp(6);
++        mBody.addView(row, lp);
+     }
+ 
+     // ---- Driver tab ---------------------------------------------------------------------------------------------
+diff --git a/android/app/src/main/java/com/dsrnative/app/Strings.java b/android/app/src/main/java/com/dsrnative/app/Strings.java
+index 16367b3..840c0f1 100644
+--- a/android/app/src/main/java/com/dsrnative/app/Strings.java
++++ b/android/app/src/main/java/com/dsrnative/app/Strings.java
+@@ -243,6 +243,250 @@ final class Strings {
+                 "가벼운 효과, 낮은 해상도의 그림자, 75% 렌더링 배율을 사용합니다 (아래 슬라이더는 계속 조절할 수 있습니다).",
+                 "更轻的特效、更低分辨率的阴影和 75% 的渲染比例（下方滑块仍可调节）。",
+                 "更輕的特效、更低解析度的陰影和 75% 的繪製比例（下方滑桿仍可調整）。");
++        put("shq_t",
++                "Shadow quality",
++                "Qualité des ombres",
++                "Schattenqualität",
++                "Qualità ombre",
++                "Calidad de sombras",
++                "Qualidade das sombras",
++                "Качество теней",
++                "影の品質",
++                "그림자 품질",
++                "阴影质量",
++                "陰影品質");
++        put("shq_n",
++                "Off skips the shadow pass completely: the biggest saving on weak GPUs, but nothing casts shadows. Low and Medium draw smaller shadow maps.",
++                "Désactivé saute entièrement la passe des ombres : le plus gros gain sur les GPU faibles, mais plus rien ne projette d'ombre. Basse et Moyenne dessinent des cartes d'ombres plus petites.",
++                "Aus lässt den Schattendurchgang ganz weg: die größte Ersparnis auf schwachen GPUs, aber nichts wirft mehr Schatten. Niedrig und Mittel zeichnen kleinere Schattenkarten.",
++                "Disattivato salta del tutto il passaggio delle ombre: il risparmio maggiore sulle GPU deboli, ma niente proietta più ombre. Bassa e Media disegnano mappe d'ombra più piccole.",
++                "Desactivado omite por completo la pasada de sombras: el mayor ahorro en GPU débiles, pero nada proyecta sombras. Baja y Media dibujan mapas de sombras más pequeños.",
++                "Desligado pula totalmente a passagem de sombras: a maior economia em GPUs fracas, mas nada projeta sombras. Baixa e Média desenham mapas de sombra menores.",
++                "«Выкл» полностью пропускает проход теней: наибольшая экономия на слабых GPU, но ничто не отбрасывает тень. «Низкое» и «Среднее» рисуют карты теней меньшего размера.",
++                "オフは影の描画パスを完全に省きます。性能の低い GPU で最も効果が大きい反面、影が一切出なくなります。低・中はより小さいシャドウマップを描きます。",
++                "끄기는 그림자 패스를 완전히 건너뜁니다. 약한 GPU에서 가장 큰 절약이지만 그림자가 전혀 생기지 않습니다. 낮음과 중간은 더 작은 그림자 맵을 그립니다.",
++                "关闭会完全跳过阴影渲染：在性能较弱的 GPU 上节省最多，但不会再有任何阴影。低和中会绘制较小的阴影贴图。",
++                "關閉會完全跳過陰影渲染：在效能較弱的 GPU 上節省最多，但不會再有任何陰影。低和中會繪製較小的陰影貼圖。");
++        put("shq_off",
++                "Off",
++                "Désactivé",
++                "Aus",
++                "Disattivato",
++                "Desactivado",
++                "Desligado",
++                "Выкл",
++                "オフ",
++                "끄기",
++                "关",
++                "關");
++        put("shq_low",
++                "Low (512)",
++                "Basse (512)",
++                "Niedrig (512)",
++                "Bassa (512)",
++                "Baja (512)",
++                "Baixa (512)",
++                "Низкое (512)",
++                "低 (512)",
++                "낮음 (512)",
++                "低 (512)",
++                "低 (512)");
++        put("shq_med",
++                "Medium (1024)",
++                "Moyenne (1024)",
++                "Mittel (1024)",
++                "Media (1024)",
++                "Media (1024)",
++                "Média (1024)",
++                "Среднее (1024)",
++                "中 (1024)",
++                "중간 (1024)",
++                "中 (1024)",
++                "中 (1024)");
++        put("shq_high",
++                "High (game default)",
++                "Haute (par défaut du jeu)",
++                "Hoch (Spielstandard)",
++                "Alta (predefinita del gioco)",
++                "Alta (predeterminada del juego)",
++                "Alta (padrão do jogo)",
++                "Высокое (как в игре)",
++                "高 (ゲーム標準)",
++                "높음 (게임 기본값)",
++                "高（游戏默认）",
++                "高（遊戲預設）");
++        put("aniso_t",
++                "Anisotropic filtering",
++                "Filtrage anisotrope",
++                "Anisotrope Filterung",
++                "Filtro anisotropico",
++                "Filtrado anisotrópico",
++                "Filtragem anisotrópica",
++                "Анизотропная фильтрация",
++                "異方性フィルタリング",
++                "비등방성 필터링",
++                "各向异性过滤",
++                "非等向性過濾");
++        put("aniso_n",
++                "Keeps floors, walls and roads sharp when seen at a low angle. Higher levels cost a little GPU time (more on Mali). Game default uses what the game asks for.",
++                "Garde nets les sols, murs et routes vus sous un angle rasant. Les niveaux élevés coûtent un peu de temps GPU (plus sur Mali). Par défaut du jeu utilise ce que le jeu demande.",
++                "Hält Böden, Wände und Wege aus flachem Blickwinkel scharf. Höhere Stufen kosten etwas GPU-Zeit (mehr auf Mali). Spielstandard nimmt, was das Spiel verlangt.",
++                "Mantiene nitidi pavimenti, muri e strade visti da un angolo radente. I livelli più alti costano un po' di tempo GPU (di più su Mali). Predefinito del gioco usa ciò che chiede il gioco.",
++                "Mantiene nítidos los suelos, muros y caminos vistos desde un ángulo bajo. Los niveles altos cuestan algo de tiempo de GPU (más en Mali). Predeterminado del juego usa lo que pide el juego.",
++                "Mantém nítidos pisos, paredes e caminhos vistos de ângulo baixo. Níveis mais altos custam um pouco de tempo de GPU (mais em Mali). Padrão do jogo usa o que o jogo pede.",
++                "Сохраняет чёткость полов, стен и дорог под острым углом обзора. Высокие уровни немного нагружают GPU (сильнее на Mali). «Как в игре» использует то, что запрашивает игра.",
++                "床・壁・道を浅い角度から見てもくっきり保ちます。高いレベルほど GPU 負荷が少し増えます (Mali ではより大きく)。「ゲーム標準」はゲームの指定どおりです。",
++                "낮은 각도에서 본 바닥, 벽, 길을 선명하게 유지합니다. 높은 단계일수록 GPU 시간이 조금 더 듭니다(Mali에서는 더 많이). 게임 기본값은 게임이 요청하는 값을 씁니다.",
++                "以较低角度观看时让地面、墙壁和道路保持清晰。等级越高 GPU 负担略大（Mali 上更明显）。游戏默认使用游戏自身的设定。",
++                "以較低角度觀看時讓地面、牆壁和道路保持清晰。等級越高 GPU 負擔略大（Mali 上更明顯）。遊戲預設使用遊戲本身的設定。");
++        put("aniso_game",
++                "Game default",
++                "Par défaut du jeu",
++                "Spielstandard",
++                "Predefinito del gioco",
++                "Predeterminado del juego",
++                "Padrão do jogo",
++                "Как в игре",
++                "ゲーム標準",
++                "게임 기본값",
++                "游戏默认",
++                "遊戲預設");
++        put("hidden_t",
++                "Skip hidden objects",
++                "Ignorer les objets cachés",
++                "Verdeckte Objekte auslassen",
++                "Salta gli oggetti nascosti",
++                "Omitir objetos ocultos",
++                "Pular objetos ocultos",
++                "Пропуск скрытых объектов",
++                "隠れた物体を省略",
++                "가려진 물체 건너뛰기",
++                "跳过隐藏物体",
++                "跳過隱藏物體");
++        put("hidden_n",
++                "Does not draw objects that covered no pixel in the last frames (retested every few frames). Faster on weak GPUs. Gentle draws everything while the camera moves, so turning shows no pop-in; Aggressive saves more but objects coming into view can appear a few frames late.",
++                "Ne dessine pas les objets qui n'ont couvert aucun pixel ces dernières images (revérifiés toutes les quelques images). Plus rapide sur les GPU faibles. Doux dessine tout pendant que la caméra bouge, donc aucun objet n'apparaît en retard en tournant ; Agressif économise plus mais un objet qui entre dans le champ peut apparaître avec quelques images de retard.",
++                "Zeichnet keine Objekte, die in den letzten Bildern kein Pixel bedeckt haben (alle paar Bilder erneut geprüft). Schneller auf schwachen GPUs. Sanft zeichnet alles, solange sich die Kamera bewegt, also kein Aufploppen beim Drehen; Aggressiv spart mehr, aber Objekte, die ins Bild kommen, können ein paar Bilder zu spät erscheinen.",
++                "Non disegna gli oggetti che non hanno coperto alcun pixel negli ultimi fotogrammi (ricontrollati ogni pochi fotogrammi). Più veloce sulle GPU deboli. Delicato disegna tutto mentre la telecamera si muove, quindi niente pop-in girandosi; Aggressivo risparmia di più ma gli oggetti che entrano in vista possono comparire con qualche fotogramma di ritardo.",
++                "No dibuja los objetos que no cubrieron ningún píxel en los últimos fotogramas (se comprueban de nuevo cada pocos fotogramas). Más rápido en GPU débiles. Suave dibuja todo mientras la cámara se mueve, así que al girar no aparecen objetos tarde; Agresivo ahorra más, pero los objetos que entran en vista pueden aparecer unos fotogramas tarde.",
++                "Não desenha objetos que não cobriram nenhum pixel nos últimos quadros (verificados de novo a cada poucos quadros). Mais rápido em GPUs fracas. Suave desenha tudo enquanto a câmera se move, então girar não causa pop-in; Agressivo economiza mais, mas objetos que entram em vista podem aparecer alguns quadros atrasados.",
++                "Не рисует объекты, которые не заняли ни одного пикселя в последних кадрах (проверяются снова каждые несколько кадров). Быстрее на слабых GPU. «Мягко» рисует всё, пока камера движется, поэтому при повороте ничего не появляется с опозданием; «Агрессивно» экономит больше, но объекты, попадающие в поле зрения, могут появиться на несколько кадров позже.",
++                "直近のフレームで 1 ピクセルも描かれなかった物体を描画しません (数フレームごとに再確認)。性能の低い GPU で速くなります。「控えめ」はカメラが動いている間はすべて描画するため、振り向いても遅れて現れる物体はありません。「積極的」はより節約しますが、視界に入った物体が数フレーム遅れて表示されることがあります。",
++                "최근 프레임에서 픽셀을 하나도 차지하지 않은 물체를 그리지 않습니다(몇 프레임마다 다시 확인). 약한 GPU에서 더 빠릅니다. 부드럽게는 카메라가 움직이는 동안 모두 그리므로 회전할 때 물체가 늦게 나타나지 않습니다. 적극적은 더 많이 절약하지만 시야에 들어온 물체가 몇 프레임 늦게 나타날 수 있습니다.",
++                "不绘制最近几帧中没有覆盖任何像素的物体（每隔几帧重新检测）。在性能较弱的 GPU 上更快。温和模式在镜头移动时绘制所有物体，因此转动镜头不会出现物体延迟出现；激进模式节省更多，但进入视野的物体可能会晚几帧出现。",
++                "不繪製最近幾幀中沒有覆蓋任何像素的物體（每隔幾幀重新檢測）。在效能較弱的 GPU 上更快。溫和模式在鏡頭移動時繪製所有物體，因此轉動鏡頭不會出現物體延遲出現；激進模式節省更多，但進入視野的物體可能會晚幾幀出現。");
++        put("hidden_gentle",
++                "Gentle",
++                "Doux",
++                "Sanft",
++                "Delicato",
++                "Suave",
++                "Suave",
++                "Мягко",
++                "控えめ",
++                "부드럽게",
++                "温和",
++                "溫和");
++        put("hidden_aggr",
++                "Aggressive",
++                "Agressif",
++                "Aggressiv",
++                "Aggressivo",
++                "Agresivo",
++                "Agressivo",
++                "Агрессивно",
++                "積極的",
++                "적극적",
++                "激进",
++                "激進");
++        put("geo_t",
++                "Geometry cache",
++                "Cache de géométrie",
++                "Geometrie-Cache",
++                "Cache della geometria",
++                "Caché de geometría",
++                "Cache de geometria",
++                "Кэш геометрии",
++                "ジオメトリキャッシュ",
++                "지오메트리 캐시",
++                "几何缓存",
++                "幾何快取");
++        put("geo_n",
++                "Memory for the level's vertex data kept on the GPU. Smaller uses less RAM (for phones with 4 GB), but it fills up sooner and is emptied and refilled with a short stutter each time. Performance mode sets 64 MB.",
++                "Mémoire pour les données de sommets du niveau gardées sur le GPU. Plus petit = moins de RAM (pour les téléphones de 4 Go), mais le cache se remplit plus vite et est vidé puis rechargé, avec une courte saccade à chaque fois. Le mode performance met 64 Mo.",
++                "Speicher für die Vertexdaten des Levels, die auf der GPU bleiben. Kleiner braucht weniger RAM (für Handys mit 4 GB), füllt sich aber schneller und wird dann geleert und neu gefüllt, jedes Mal mit einem kurzen Ruckler. Der Leistungsmodus stellt 64 MB ein.",
++                "Memoria per i dati dei vertici del livello tenuti sulla GPU. Più piccola usa meno RAM (per telefoni da 4 GB), ma si riempie prima e viene svuotata e ricaricata con un breve scatto ogni volta. La modalità prestazioni imposta 64 MB.",
++                "Memoria para los datos de vértices del nivel guardados en la GPU. Más pequeña usa menos RAM (para teléfonos de 4 GB), pero se llena antes y se vacía y recarga con un breve tirón cada vez. El modo rendimiento pone 64 MB.",
++                "Memória para os dados de vértices do nível mantidos na GPU. Menor usa menos RAM (para celulares de 4 GB), mas enche mais rápido e é esvaziada e recarregada com um breve travamento a cada vez. O modo desempenho define 64 MB.",
++                "Память для данных вершин уровня, хранящихся на GPU. Меньший размер — меньше ОЗУ (для телефонов с 4 ГБ), но кэш быстрее заполняется и очищается с повторной загрузкой, каждый раз с короткой заминкой. Режим производительности ставит 64 МБ.",
++                "GPU 上に保持するステージの頂点データ用メモリ。小さいほど RAM の使用量が減ります (4 GB の端末向け) が、早くいっぱいになり、そのたびに空にして読み直すため短いカクつきが起きます。パフォーマンスモードは 64 MB にします。",
++                "GPU에 보관하는 레벨 정점 데이터용 메모리입니다. 작을수록 RAM을 덜 쓰지만(4 GB 휴대폰용), 더 빨리 가득 차서 비우고 다시 채울 때마다 짧은 끊김이 생깁니다. 성능 모드는 64 MB로 설정합니다.",
++                "保存在 GPU 上的关卡顶点数据所用内存。越小占用 RAM 越少（适合 4 GB 手机），但会更快填满，每次清空并重新填充时都会短暂卡顿。性能模式会设为 64 MB。",
++                "保存在 GPU 上的關卡頂點資料所用記憶體。越小佔用 RAM 越少（適合 4 GB 手機），但會更快填滿，每次清空並重新填充時都會短暫卡頓。效能模式會設為 64 MB。");
++        put("prepass_t",
++                "Skip depth prepass",
++                "Sauter la pré-passe de profondeur",
++                "Tiefen-Vorpass überspringen",
++                "Salta il pre-pass di profondità",
++                "Omitir prepasada de profundidad",
++                "Pular pré-passagem de profundidade",
++                "Пропуск прохода глубины",
++                "深度プリパスを省略",
++                "깊이 프리패스 건너뛰기",
++                "跳过深度预渲染",
++                "跳過深度預渲染");
++        put("prepass_n",
++                "The game draws its world twice: once for depth only, then in colour. Tile-based GPUs like Mali do not need the first pass, so it is left out and the colour pass writes the depth: about half the vertex work. Turn off if objects show through walls or flicker.",
++                "Le jeu dessine son monde deux fois : d'abord la profondeur seule, puis en couleur. Les GPU à tuiles comme Mali n'ont pas besoin de la première passe : elle est sautée et la passe couleur écrit la profondeur, soit environ la moitié du travail sur les sommets. Désactivez si des objets apparaissent à travers les murs ou scintillent.",
++                "Das Spiel zeichnet seine Welt zweimal: erst nur die Tiefe, dann in Farbe. Kachelbasierte GPUs wie Mali brauchen den ersten Durchgang nicht, er wird ausgelassen und der Farbdurchgang schreibt die Tiefe: etwa halb so viel Vertex-Arbeit. Ausschalten, wenn Objekte durch Wände scheinen oder flackern.",
++                "Il gioco disegna il mondo due volte: prima solo la profondità, poi a colori. Le GPU a tile come Mali non hanno bisogno del primo passaggio, quindi viene saltato e il passaggio a colori scrive la profondità: circa metà del lavoro sui vertici. Disattiva se gli oggetti si vedono attraverso i muri o sfarfallano.",
++                "El juego dibuja su mundo dos veces: primero solo la profundidad y luego en color. Las GPU por mosaicos como Mali no necesitan la primera pasada, así que se omite y la pasada de color escribe la profundidad: cerca de la mitad del trabajo de vértices. Desactívalo si se ven objetos a través de las paredes o parpadean.",
++                "O jogo desenha o mundo duas vezes: primeiro só a profundidade, depois em cores. GPUs baseadas em tiles como Mali não precisam da primeira passagem, então ela é pulada e a passagem de cor escreve a profundidade: cerca de metade do trabalho de vértices. Desligue se objetos aparecerem através das paredes ou piscarem.",
++                "Игра рисует мир дважды: сначала только глубину, затем в цвете. Тайловым GPU вроде Mali первый проход не нужен, поэтому он пропускается, а глубину пишет цветовой проход: примерно вдвое меньше работы с вершинами. Выключите, если объекты видны сквозь стены или мерцают.",
++                "ゲームはワールドを 2 回描画します (深度のみ、次にカラー)。Mali のようなタイル型 GPU では最初のパスは不要なため省き、カラーパスで深度を書き込みます。頂点処理がおよそ半分になります。物体が壁越しに見えたりちらついたりする場合はオフにしてください。",
++                "게임은 월드를 두 번 그립니다(깊이만, 그다음 컬러). Mali 같은 타일 기반 GPU에는 첫 번째 패스가 필요 없으므로 생략하고 컬러 패스가 깊이를 기록합니다. 정점 작업이 약 절반으로 줄어듭니다. 물체가 벽을 통해 보이거나 깜박이면 끄세요.",
++                "游戏会将世界绘制两次：先只绘制深度，再绘制颜色。Mali 等基于图块的 GPU 不需要第一遍，因此跳过它并由颜色渲染写入深度：顶点工作量约减半。如果物体透过墙壁显示或闪烁，请关闭。",
++                "遊戲會將世界繪製兩次：先只繪製深度，再繪製顏色。Mali 等基於圖塊的 GPU 不需要第一遍，因此跳過它並由顏色渲染寫入深度：頂點工作量約減半。若物體透過牆壁顯示或閃爍，請關閉。");
++        put("turbo_t", "Mali Tile Turbo", "Mali Tile Turbo",
++                "Mali Tile Turbo", "Mali Tile Turbo", "Mali Tile Turbo",
++                "Mali Tile Turbo", "Mali Tile Turbo", "Mali Tile Turbo",
++                "Mali Tile Turbo", "Mali Tile Turbo", "Mali Tile Turbo");
++        put("turbo_n", "Mali GPUs only: lighter GPU synchronisation between rendering steps, which may raise the frame rate. Turn off if anything flickers, goes black or goes missing.",
++                "GPU Mali uniquement : synchronisation GPU allégée entre les étapes de rendu, ce qui peut augmenter les images par seconde. Désactivez si quelque chose clignote, devient noir ou disparaît.",
++                "Nur Mali-GPUs: leichtere GPU-Synchronisierung zwischen den Renderschritten, kann die Bildrate erhöhen. Ausschalten, wenn etwas flackert, schwarz wird oder fehlt.",
++                "Solo GPU Mali: sincronizzazione GPU più leggera tra le fasi di rendering, può aumentare i fotogrammi al secondo. Disattiva se qualcosa sfarfalla, diventa nero o scompare.",
++                "Solo GPU Mali: sincronización de GPU más ligera entre los pasos de renderizado, puede aumentar los fotogramas por segundo. Desactívalo si algo parpadea, se vuelve negro o desaparece.",
++                "Somente GPUs Mali: sincronização de GPU mais leve entre as etapas de renderização, pode aumentar os quadros por segundo. Desligue se algo piscar, ficar preto ou sumir.",
++                "Только GPU Mali: облегчённая синхронизация GPU между этапами отрисовки, может повысить частоту кадров. Выключите, если что-то мерцает, чернеет или пропадает.",
++                "Mali GPU のみ：描画ステップ間の GPU 同期を軽くし、フレームレートが上がる場合があります。ちらつき・黒くなる・消える場合はオフにしてください。",
++                "Mali GPU 전용: 렌더링 단계 사이의 GPU 동기화를 가볍게 하여 프레임 속도가 오를 수 있습니다. 깜박이거나 검게 되거나 사라지면 끄세요.",
++                "仅限 Mali GPU：减轻渲染步骤之间的 GPU 同步，可能提高帧率。如果画面闪烁、变黑或消失，请关闭。",
++                "僅限 Mali GPU：減輕繪製步驟之間的 GPU 同步，可能提高影格率。如果畫面閃爍、變黑或消失，請關閉。");
++        put("mali_preset_t", "Mali preset", "Préréglage Mali", "Mali-Voreinstellung", "Preset Mali", "Preset Mali",
++                "Predefinição Mali", "Пресет для Mali", "Mali向けプリセット", "Mali 프리셋", "Mali 预设", "Mali 預設");
++        put("mali_preset_n",
++                "One tap for Mali GPUs: Mali Tile Turbo, skip depth pre-pass, gentle hidden-draw skipping, 1024 shadows, 4x anisotropic filtering and a 128 MB geometry cache. These options are experimental: if something flickers or goes missing, turn the preset off. Changes at the next start.",
++                "Un seul geste pour les GPU Mali : Mali Tile Turbo, pré-passe de profondeur ignorée, saut doux des éléments cachés, ombres 1024, filtrage anisotrope 4x et cache de géométrie de 128 Mo. Ces options sont expérimentales : si quelque chose scintille ou disparaît, désactivez le préréglage. Prend effet au prochain lancement.",
++                "Ein Tipp für Mali-GPUs: Mali Tile Turbo, Tiefen-Vorpass überspringen, sanftes Überspringen verdeckter Objekte, 1024er Schatten, 4x anisotrope Filterung und 128 MB Geometrie-Cache. Diese Optionen sind experimentell: Flackert oder fehlt etwas, schalte die Voreinstellung wieder aus. Gilt ab dem nächsten Start.",
++                "Un tocco per le GPU Mali: Mali Tile Turbo, pre-pass di profondità saltato, salto morbido degli elementi nascosti, ombre 1024, filtro anisotropico 4x e cache geometrica da 128 MB. Opzioni sperimentali: se qualcosa sfarfalla o sparisce, disattiva il preset. Valido dal prossimo avvio.",
++                "Un toque para GPU Mali: Mali Tile Turbo, omitir el prepase de profundidad, omitir con suavidad lo oculto, sombras de 1024, filtro anisotrópico 4x y caché de geometría de 128 MB. Son opciones experimentales: si algo parpadea o desaparece, desactiva el preset. Se aplica en el próximo inicio.",
++                "Um toque para GPUs Mali: Mali Tile Turbo, pular o pré-passe de profundidade, pular com suavidade o que está oculto, sombras de 1024, filtro anisotrópico 4x e cache de geometria de 128 MB. São opções experimentais: se algo piscar ou sumir, desative a predefinição. Vale a partir do próximo início.",
++                "Одно касание для GPU Mali: Mali Tile Turbo, пропуск предпрохода глубины, мягкий пропуск скрытых объектов, тени 1024, анизотропная фильтрация 4x и кэш геометрии 128 МБ. Опции экспериментальные: если что-то мерцает или пропадает, отключите пресет. Применяется при следующем запуске.",
++                "Mali GPU向けのワンタップ設定：Mali Tile Turbo、深度プリパスのスキップ、隠れた描画の控えめなスキップ、1024の影、4x異方性フィルタリング、128 MBのジオメトリキャッシュ。実験的な機能です。ちらつきや欠けが出たらプリセットをオフにしてください。次回の起動時に反映されます。",
++                "Mali GPU용 원탭 설정: Mali Tile Turbo, 깊이 프리패스 건너뛰기, 가려진 드로우 완만하게 건너뛰기, 1024 그림자, 4x 이방성 필터링, 128 MB 지오메트리 캐시. 실험적인 옵션이므로 깜빡임이나 누락이 생기면 프리셋을 끄세요. 다음 시작 때 적용됩니다.",
++                "为 Mali GPU 提供的一键设置：Mali Tile Turbo、跳过深度预通道、温和跳过被遮挡的绘制、1024 阴影、4x 各向异性过滤和 128 MB 几何缓存。这些选项是实验性的：如果出现闪烁或缺失，请关闭预设。下次启动时生效。",
++                "為 Mali GPU 提供的一鍵設定：Mali Tile Turbo、跳過深度預通道、溫和跳過被遮蔽的繪製、1024 陰影、4x 各向異性過濾與 128 MB 幾何快取。這些選項為實驗性：若出現閃爍或缺失，請關閉預設。下次啟動時生效。");
++        put("mali_preset_apply", "Apply the Mali preset", "Appliquer le préréglage Mali", "Mali-Voreinstellung anwenden",
++                "Applica il preset Mali", "Aplicar el preset Mali", "Aplicar a predefinição Mali", "Применить пресет Mali",
++                "Mali向けプリセットを適用", "Mali 프리셋 적용", "应用 Mali 预设", "套用 Mali 預設");
++        put("mali_preset_reset", "Back to the default values", "Revenir aux valeurs par défaut", "Zurück zu den Standardwerten",
++                "Torna ai valori predefiniti", "Volver a los valores por defecto", "Voltar aos valores padrão",
++                "Вернуть значения по умолчанию", "既定値に戻す", "기본값으로 되돌리기", "恢复默认值", "恢復預設值");
++        put("mali_preset_done", "Saved. The options take effect at the next start.", "Enregistré. Les options prennent effet au prochain lancement.",
++                "Gespeichert. Die Optionen gelten ab dem nächsten Start.", "Salvato. Le opzioni valgono dal prossimo avvio.",
++                "Guardado. Las opciones se aplican en el próximo inicio.", "Salvo. As opções valem a partir do próximo início.",
++                "Сохранено. Параметры применятся при следующем запуске.", "保存しました。次回の起動時に反映されます。",
++                "저장했습니다. 다음 시작 때 적용됩니다.", "已保存。选项将在下次启动时生效。", "已儲存。選項將在下次啟動時生效。");
+         put("sec_gpu", "GPU options", "Options GPU", "GPU-Optionen", "Opzioni GPU", "Opciones de GPU", "Opções de GPU",
+                 "Параметры GPU", "GPU オプション", "GPU 옵션", "GPU 选项", "GPU 選項");
+         put("gpu_n", "For GPUs such as Mali that lack the game's texture formats or draw in tiles. Off unless you are testing.",
+diff --git a/src/hle/nvn/vk_backend.cpp b/src/hle/nvn/vk_backend.cpp
+index 3c2f536..1302f3c 100644
+--- a/src/hle/nvn/vk_backend.cpp
++++ b/src/hle/nvn/vk_backend.cpp
+@@ -1330,6 +1330,14 @@ public:
+         std::lock_guard<std::mutex> lk(m_);
+         if (!EnsureDevice()) return;
+         ReportDraws();
++        occ_frame_++;
++        if (occ_still_ < 1000000) occ_still_++;  // OccCamera sets it back to 0 when the camera moves
++        // skip_hidden: keys of draws the game no longer issues (streamed geometry gets new addresses) go.
++        if (occ_state_.size() > 12000 && (occ_frame_ & 127) == 0)
++            for (auto it = occ_state_.begin(); it != occ_state_.end();) {
++                if (it->second.last_seen + 600 < occ_frame_) it = occ_state_.erase(it);
++                else ++it;
++            }
+         // The frame rate cap changed while the game runs (settings menu): tell the display.
+         if (window_ && swapchain_ && window_fps_ && window_fps_ != dsr::FixedFps(dsr::GetRuntime().config))
+             SetWindowFrameRate();
+@@ -1588,7 +1596,8 @@ private:
+         dsr::SetGpuHasBc(features_.textureCompressionBC || bc_forced_);
+         tex_quality_ = std::clamp(dsr::GetRuntime().config.texture_quality, 25, 100);
+         mip_skip_ = tex_quality_ < 100;
+-        lighting_off_ = dsr::GetRuntime().config.lighting_off;
++        // shadow_quality 0 = no shadows: the same shadow-pass suppression as lighting_off, without its other effects.
++        lighting_off_ = dsr::GetRuntime().config.lighting_off || dsr::GetRuntime().config.shadow_quality == 0;
+         load_skip_ = dsr::GetRuntime().config.pass_load_skip;
+         ChooseStagingMemory();
+         if (lighting_off_) LOGI(kTag, "lighting_off: shadow map passes are not drawn and the shadow lookups say \"lit\"");
+@@ -1612,6 +1621,13 @@ private:
+         mali_barriers_ = dsr::GetRuntime().config.mali_barriers;
+         if (mali_barriers_)
+             LOGI(kTag, "settings mali_barriers = 1: narrow layout barriers, render targets readable when their pass ends");
++        // mali_tile_turbo (experimental, Mali only; from PR #73 by Dann-os3d): see LayoutScope.
++        const bool is_mali = props_.vendorID == 0x13B5 || strstr(props_.deviceName, "Mali") != nullptr;
++        tile_turbo_ = dsr::GetRuntime().config.mali_tile_turbo && is_mali;
++        if (tile_turbo_)
++            LOGI(kTag, "settings mali_tile_turbo = 1: layout-scoped barriers (unknown layouts keep the full barrier)");
++        else if (dsr::GetRuntime().config.mali_tile_turbo)
++            LOGI(kTag, "settings mali_tile_turbo = 1 ignored: not a Mali GPU");
+         if (!begin_rendering_ || !end_rendering_) {
+             // Older drivers (Vulkan 1.1, e.g. Adreno 6xx on Android 10/11): render pass and framebuffer objects.
+             begin_rendering_ = nullptr;
+@@ -1646,6 +1662,12 @@ private:
+                 qi.queryCount = 2;
+                 if (vkCreateQueryPool(device_, &qi, nullptr, &sl.ts) != VK_SUCCESS) sl.ts = VK_NULL_HANDLE;
+             }
++            if (dsr::GetRuntime().config.skip_hidden) {
++                VkQueryPoolCreateInfo oi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
++                oi.queryType = VK_QUERY_TYPE_OCCLUSION;
++                oi.queryCount = kOccQueries;
++                if (vkCreateQueryPool(device_, &oi, nullptr, &sl.occ) != VK_SUCCESS) sl.occ = VK_NULL_HANDLE;
++            }
+             desc_pool_ = MakeDescriptorPool();
+             if (!CreateStream() || !desc_pool_) return false;
+             if (!persist_pool_) CreatePersistentPool();
+@@ -1870,6 +1892,7 @@ private:
+         if (!recording_) return;
+         EndRendering();
+         SubmitAndWait(VK_NULL_HANDLE, VK_NULL_HANDLE);
++        CollectOcclusion(slots_[slot_]);  // done on the GPU; the same slot's queries are reset by Begin
+         recording_ = false;
+         Begin();
+         flushes_++;
+@@ -2977,7 +3000,19 @@ private:
+         ci.mipLodBias = s.lod_bias;
+         ci.minLod = std::max(0.0f, s.lod_min);
+         ci.maxLod = (s.min_filter <= 1) ? 0.25f : std::max(ci.minLod, std::min(s.lod_max, 16.0f));
+-        if (filterable && features_.samplerAnisotropy && s.max_anisotropy > 1.0f) {
++        // Settings anisotropy 0 / 2-16: the player's choice instead of the game's, on mipmapped linear samplers (the
++        // world's textures; the HUD's single-level ones and nearest-filtered lookups are left as they are).
++        const int aniso_force = dsr::GetRuntime().config.anisotropy;
++        const bool mipmapped_linear = ci.minFilter == VK_FILTER_LINEAR && s.min_filter >= 2 && ci.maxLod > 0.25f;
++        if (aniso_force >= 0 && filterable && !shadow && mipmapped_linear) {
++            if (aniso_force >= 2 && features_.samplerAnisotropy) {
++                ci.anisotropyEnable = VK_TRUE;
++                ci.maxAnisotropy = std::min(float(aniso_force), props_.limits.maxSamplerAnisotropy);
++            }
++            LogOnce(("anisoset" + std::to_string(int(s.max_anisotropy))).c_str(),
++                    "settings anisotropy %d: a sampler the game set to %.0fx uses %.0fx", aniso_force, s.max_anisotropy,
++                    ci.anisotropyEnable ? ci.maxAnisotropy : 1.0f);
++        } else if (filterable && features_.samplerAnisotropy && s.max_anisotropy > 1.0f) {
+             ci.anisotropyEnable = VK_TRUE;
+             ci.maxAnisotropy = std::min(s.max_anisotropy, props_.limits.maxSamplerAnisotropy);
+             // `max_anisotropy` (settings): a lower limit than the game's, for slower GPUs (0 = the game's).
+@@ -3032,6 +3067,8 @@ private:
+         uint32_t count = 0, instances = 0, first_vertex = 0, base_instance = 0;
+         int32_t vertex_offset = 0;
+         uint32_t query = UINT32_MAX;  // occlusion query index (captures)
++        VkQueryPool occ_pool = VK_NULL_HANDLE;  // skip_hidden: the slot's occlusion pool and query index
++        uint32_t occ_q = UINT32_MAX;
+         uint16_t n_vb = 0, n_tex = 0, n_ubo = 0;
+     };
+     // ======================================================================================================
+@@ -3267,6 +3304,7 @@ private:
+             VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+             vkBeginCommandBuffer(cmd_, &bi);
++            if (VkQueryPool occ = slots_[i].occ) vkCmdResetQueryPool(cmd_, occ, 0, kOccQueries);
+             if (VkQueryPool ts = slots_[i].ts) {
+                 vkCmdResetQueryPool(cmd_, ts, 0, 2);
+                 vkCmdWriteTimestamp(cmd_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, ts, 0);
+@@ -3454,6 +3492,7 @@ private:
+             WaitSlotFence(sl);
+             DeliverReadbacks(sl);
+             CollectGpuTime(sl);
++            CollectOcclusion(sl);
+             vkResetFences(device_, 1, &sl.fence);
+             sl.pending = false;
+             completed_seq_ = std::max(completed_seq_, sl.seq);  // one queue: earlier submissions are done too
+@@ -3474,6 +3513,7 @@ private:
+             if (sl.pending) {
+                 DeliverReadbacks(sl);
+                 CollectGpuTime(sl);
++                CollectOcclusion(sl);
+                 vkResetFences(device_, 1, &sl.fence);
+                 sl.pending = false;
+             }
+@@ -3500,21 +3540,79 @@ private:
+     }
+     bool mali_barriers_ = false;  // settings mali_barriers
+     uint64_t vertex_read_barriers_ = 0;
++
++    // ---- mali_tile_turbo (experimental, Mali only; from PR #73 by Dann-os3d) --------------------------------------
++    // A layout transition normally waits for all earlier work (ALL_COMMANDS, any memory write) and blocks all later
++    // work. When both layouts say exactly how the image is used (attachment, copy, sampled), the barrier is scoped to
++    // those stages and accesses instead, so a tile-based GPU can keep unrelated work going across it. GENERAL and
++    // other layouts keep the full barrier. The pass-to-pass attachment barrier is likewise narrowed to the kinds of
++    // attachment (colour, depth) that have an unsynchronised write.
++    bool tile_turbo_ = false;
++    uint64_t turbo_scoped_ = 0, turbo_full_ = 0;
++    static bool LayoutScope(VkImageLayout layout, bool source, VkPipelineStageFlags* stages, VkAccessFlags* access) {
++        switch (layout) {
++            case VK_IMAGE_LAYOUT_UNDEFINED:  // contents discarded: nothing to wait for (only valid as the source)
++                if (!source) return false;
++                *stages = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
++                *access = 0;
++                return true;
++            case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
++                *stages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
++                *access = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
++                return true;
++            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
++                *stages = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
++                *access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
++                return true;
++            case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
++                *stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
++                *access = VK_ACCESS_TRANSFER_READ_BIT;
++                return true;
++            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
++                *stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
++                *access = VK_ACCESS_TRANSFER_WRITE_BIT;
++                return true;
++            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:  // sampled by vertex / fragment shaders (no compute here)
++                *stages = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
++                *access = VK_ACCESS_SHADER_READ_BIT;
++                return true;
++            default:
++                return false;
++        }
++    }
++
+     void RawBarrier(VkImage image, VkImageAspectFlags aspect, VkImageLayout from, VkImageLayout to,
+                     uint32_t levels = 1, uint32_t layers = 1) {
+         barriers_++;
+-        const VkPipelineStageFlags dst_stages = mali_barriers_ ? StagesUsing(to) : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
++        VkPipelineStageFlags src_stages = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
++        VkPipelineStageFlags dst_stages = mali_barriers_ ? StagesUsing(to) : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
++        VkAccessFlags src_access = VK_ACCESS_MEMORY_WRITE_BIT;
++        VkAccessFlags dst_access = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
++        if (tile_turbo_) {
++            VkPipelineStageFlags ss = 0, ds = 0;
++            VkAccessFlags sa = 0, da = 0;
++            if (LayoutScope(from, true, &ss, &sa) && LayoutScope(to, false, &ds, &da)) {
++                src_stages = ss;
++                dst_stages = ds;
++                src_access = sa;
++                dst_access = da;
++                turbo_scoped_++;
++            } else {
++                dst_stages = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
++                turbo_full_++;
++            }
++        }
+         VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+-        b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+-        b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
++        b.srcAccessMask = src_access;
++        b.dstAccessMask = dst_access;
+         b.oldLayout = from;
+         b.newLayout = to;
+         b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+         b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+         b.image = image;
+         b.subresourceRange = {aspect, 0, levels, 0, layers};
+-        Rec([b, dst_stages](VkCommandBuffer cb) {
+-            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, dst_stages, 0, 0, nullptr, 0, nullptr, 1, &b);
++        Rec([b, src_stages, dst_stages](VkCommandBuffer cb) {
++            vkCmdPipelineBarrier(cb, src_stages, dst_stages, 0, 0, nullptr, 0, nullptr, 1, &b);
+         });
+     }
+     void Transition(Image& img, VkImageLayout to) {
+@@ -4595,6 +4693,71 @@ private:
+             return;
+         }
+ 
++        // ---- skip_prepass (experimental, for Mali; from PR #47): see PrepassStat ------------------------------------
++        struct ForceDepthWrite {
++            bool* p = nullptr;
++            ~ForceDepthWrite() {
++                if (p) *p = false;
++            }
++        } force_depth_write;
++        if (dsr::GetRuntime().config.skip_prepass && depth && depth->width >= 256 && st_.depth.depth_test &&
++            !st_.depth.stencil_test && !shader_depth_test && (st_.depth.depth_func == 2 || st_.depth.depth_func == 4) &&
++            !(st_.program[1] && fs->info.writes_depth) && !capture_active_) {
++            bool any_color = false;
++            for (Image* c : colors) any_color |= c != nullptr;
++            const bool colour_writes = any_color && (st_.channel.mask & 0xF) != 0;
++            const bool depth_only = !colour_writes && st_.depth.depth_write;
++            const bool main_like = colour_writes && !st_.depth.depth_write && st_.color.blend_enable == 0;
++            if (depth_only || main_like) {
++                PrepassStat& ps = prepass_[depth->addr];
++                if (ps.frame != occ_frame_) {
++                    ps.learned = ps.pre >= 16 && ps.matched >= 16 && uint64_t(ps.matched) * 10 >= uint64_t(ps.pre) * 8;
++                    ps.frame = occ_frame_;
++                    ps.pre = ps.main = ps.matched = 0;
++                }
++                if (prepass_keys_frame_ != occ_frame_) {
++                    prepass_keys_.clear();
++                    prepass_keys_frame_ = occ_frame_;
++                }
++                const uint64_t pkey = PrepassKey(p, depth->addr);
++                if (depth_only) {
++                    ps.pre++;
++                    if (prepass_keys_.size() < 8192) prepass_keys_.insert(pkey);
++                    if (ps.learned) {
++                        prepass_skipped_++;
++                        return;
++                    }
++                } else {
++                    ps.main++;
++                    const bool twin = prepass_keys_.count(pkey) != 0;
++                    if (twin) ps.matched++;
++                    if (ps.learned) {
++                        if (twin) {
++                            st_.depth.depth_write = true;  // restored when this draw is done (ForceDepthWrite)
++                            force_depth_write.p = &st_.depth.depth_write;
++                            prepass_converted_++;
++                        } else {
++                            prepass_unmatched_++;
++                        }
++                    }
++                }
++            }
++        }
++        // ---- skip_hidden (experimental; from PR #47): world draws that covered no pixel lately are left out ----------
++        uint64_t occ_key = 0;
++        bool occ_query = false;
++        if (dsr::GetRuntime().config.skip_hidden && !capture_active_ && OccCandidate(p, colors, depth, shader_depth_test) &&
++            OccKey(p, vin, uint32_t(depth->width), &occ_key)) {
++            occ_judged_++;
++            if (!colors.empty() && colors[0] && occ_cam_frame_ != occ_frame_) OccCamera();
++            const int act = OccDecide(occ_key);
++            if (act == 2) {
++                occ_skipped_++;
++                return;
++            }
++            occ_query = act == 1;
++        }
++
+         Begin();
+         // Keep enough streaming space for this draw so nothing allocated below is lost to a flush.
+         if (StreamRemaining() < (16ull << 20)) Flush();
+@@ -5137,6 +5300,16 @@ private:
+         for (const VkVertexInputBindingDescription& b : vin.bindings)
+             instanced |= b.inputRate == VK_VERTEX_INPUT_RATE_INSTANCE;
+         d.base_instance = instanced ? 0 : uint32_t(p.base_instance);
++        if (occ_query && recording_) {
++            Slot& osl = slots_[slot_];
++            if (osl.occ && osl.occ_used < kOccQueries) {
++                d.occ_pool = osl.occ;
++                d.occ_q = osl.occ_used++;
++                osl.occ_keys.push_back(occ_key);
++                occ_queried_++;
++            }
++        }
++        if (occ_query && d.occ_pool == VK_NULL_HANDLE) occ_state_[occ_key].veto = true;  // drawn without a query
+         if (capture_active_ && query_pool_ && query_pass_.size() < kMaxQueries) {
+             d.query = uint32_t(query_pass_.size());
+             query_pass_.push_back(capture_pass_);
+@@ -5487,6 +5660,7 @@ private:
+         }
+         ApplyDynamicState(d.dyn);
+         if (d.query != UINT32_MAX) vkCmdBeginQuery(cb, query_pool_, d.query, 0);
++        if (d.occ_pool) vkCmdBeginQuery(cb, d.occ_pool, d.occ_q, 0);
+         if (d.indexed) {
+             if (bound_ib_.first != d.index_buf || bound_ib_.second != d.index_off || bound_ib_type_ != d.index_type) {
+                 vkCmdBindIndexBuffer(cb, d.index_buf, d.index_off, d.index_type);
+@@ -5498,6 +5672,7 @@ private:
+             vkCmdDraw(cb, d.count, d.instances, d.first_vertex, d.base_instance);
+         }
+         if (d.query != UINT32_MAX) vkCmdEndQuery(cb, query_pool_, d.query);
++        if (d.occ_pool) vkCmdEndQuery(cb, d.occ_pool, d.occ_q);
+     }
+ 
+     // Viewport, scissor, blend constants and stencil values of the draw (render thread).
+@@ -5945,7 +6120,7 @@ private:
+     // when their content changed: small ranges (where per-frame data like particles and UI lives) are hashed in
+     // full, large ones at 256 spots plus both ends. When the buffer fills up it is emptied (after the GPU is
+     // done with it) and refilled.
+-    static constexpr VkDeviceSize kGeoSize = 192ull << 20;
++    VkDeviceSize geo_size_ = 192ull << 20;  // settings geo_cache_mb (read when the cache is created)
+     VkBuffer geo_buf_ = VK_NULL_HANDLE;
+     VkDeviceMemory geo_mem_ = VK_NULL_HANDLE;
+     uint8_t* geo_ptr_ = nullptr;
+@@ -6068,7 +6243,8 @@ private:
+         if (geo_buf_) return true;
+         if (geo_failed_) return false;
+         VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+-        bi.size = kGeoSize;
++        geo_size_ = VkDeviceSize(std::clamp(dsr::GetRuntime().config.geo_cache_mb, 32, 512)) << 20;
++        bi.size = geo_size_;
+         bi.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+         VkMemoryRequirements req;
+         VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+@@ -6079,9 +6255,9 @@ private:
+         ai.memoryTypeIndex = StagingMemory(req.memoryTypeBits);
+         if (vkAllocateMemory(device_, &ai, nullptr, &geo_mem_) != VK_SUCCESS) goto fail;
+         vkBindBufferMemory(device_, geo_buf_, geo_mem_, 0);
+-        if (vkMapMemory(device_, geo_mem_, 0, kGeoSize, 0, &p) != VK_SUCCESS) goto fail;
++        if (vkMapMemory(device_, geo_mem_, 0, geo_size_, 0, &p) != VK_SUCCESS) goto fail;
+         geo_ptr_ = static_cast<uint8_t*>(p);
+-        LOGI(kTag, "geometry cache: %llu MB", (unsigned long long)(kGeoSize >> 20));
++        LOGI(kTag, "geometry cache: %llu MB", (unsigned long long)(geo_size_ >> 20));
+         return true;
+     fail:
+         LOGW(kTag, "geometry cache unavailable: vertex data is streamed every frame");
+@@ -6174,7 +6350,7 @@ private:
+             return VK_WHOLE_SIZE;
+         }
+         const VkDeviceSize need = (size + 63) & ~VkDeviceSize(63);
+-        if (geo_off_ + need > kGeoSize) {
++        if (geo_off_ + need > geo_size_) {
+             // Full: start over once the GPU no longer reads any of it.
+             Flush();
+             WaitGpuIdle();
+@@ -6408,6 +6584,23 @@ private:
+         }
+         LOGI(kTag, "last 10 s: %llu render passes started, %llu image barriers (%llu for vertex-shader reads of render targets)",
+              (unsigned long long)render_passes_, (unsigned long long)barriers_, (unsigned long long)vertex_read_barriers_);
++        if (tile_turbo_)
++            LOGI(kTag, "mali_tile_turbo: %llu barriers scoped by layout, %llu kept full (other layouts)",
++                 (unsigned long long)turbo_scoped_, (unsigned long long)turbo_full_);
++        turbo_scoped_ = turbo_full_ = 0;
++        if (dsr::GetRuntime().config.skip_prepass)
++            LOGI(kTag, "skip_prepass: %llu depth-only draws left out, %llu colour draws writing the depth, %llu colour draws "
++                 "without a twin (unchanged), %zu depth buffers tracked (last 10 s)", (unsigned long long)prepass_skipped_,
++                 (unsigned long long)prepass_converted_, (unsigned long long)prepass_unmatched_, prepass_.size());
++        prepass_skipped_ = prepass_converted_ = prepass_unmatched_ = 0;
++        if (dsr::GetRuntime().config.skip_hidden)
++            LOGI(kTag, "skip_hidden %s: %llu draws judged, %llu left out, %llu drawn with a visibility query (%llu of them "
++                 "hidden ones while the camera moved), %llu kept until their retest's result, %llu came back into view, "
++                 "%zu draws tracked (last 10 s)", dsr::GetRuntime().config.skip_hidden == 1 ? "gentle" : "aggressive",
++                 (unsigned long long)occ_judged_, (unsigned long long)occ_skipped_, (unsigned long long)occ_queried_,
++                 (unsigned long long)occ_moving_frames_, (unsigned long long)occ_kept_, (unsigned long long)occ_woke_,
++                 occ_state_.size());
++        occ_judged_ = occ_skipped_ = occ_queried_ = occ_woke_ = occ_moving_frames_ = occ_kept_ = 0;
+         vertex_read_barriers_ = 0;
+         render_passes_ = barriers_ = 0;
+         size_t rp_size = 0, fb_size = 0;
+@@ -6471,7 +6664,7 @@ private:
+         if (geo_buf_) {
+             LOGI(kTag, "geometry cache: %llu reused, %llu copied (%.1f MB), %llu volatile (streamed), %.0f of %llu MB used, "
+                  "%llu resets", (unsigned long long)geo_hits_, (unsigned long long)geo_misses_, geo_bytes_ / 1048576.0,
+-                 (unsigned long long)geo_volatile_, geo_off_ / 1048576.0, (unsigned long long)(kGeoSize >> 20),
++                 (unsigned long long)geo_volatile_, geo_off_ / 1048576.0, (unsigned long long)(geo_size_ >> 20),
+                  (unsigned long long)geo_resets_);
+             geo_hits_ = geo_misses_ = geo_bytes_ = geo_volatile_ = 0;
+         }
+@@ -6965,6 +7158,179 @@ private:
+         int report = -1;       // 0: write the 32-bit `value`; 1: write a counter report {counter, timestamp}
+         uint32_t value = 0;
+     };
++    // ---- skip_prepass (experimental, for Mali; from PR #47) --------------------------------------------------------
++    // Frame captures: the world is drawn twice on the same depth buffer, first without colour (depth func LEQUAL,
++    // write on), then with colour (LEQUAL, write off), the same draws. On a tile-based GPU the second pass needs no
++    // prepass (hidden surface removal), so the first one only repeats the vertex work and the binning. A depth buffer
++    // that had >= 16 depth-only draws last frame, >= 80% of them matched by a colour draw of the same mesh, is treated
++    // this way this frame: its depth-only draws are left out and the matched colour draws write the depth. Colour
++    // draws without a twin (decals, sky, overlays) keep the game's state.
++    struct PrepassStat {
++        uint32_t frame = 0, pre = 0, main = 0, matched = 0;
++        bool learned = false;
++    };
++    std::unordered_map<uint64_t, PrepassStat> prepass_;
++    std::unordered_set<uint64_t> prepass_keys_;  // this frame's depth-only draws (mesh identity + depth buffer)
++    uint32_t prepass_keys_frame_ = ~0u;
++    uint64_t prepass_skipped_ = 0, prepass_converted_ = 0, prepass_unmatched_ = 0;
++    static uint64_t PrepassKey(const DrawParams& p, uint64_t depth_addr) {
++        uint64_t h = 1469598103934665603ull;
++        const auto mix = [&h](uint64_t v) {
++            h ^= v;
++            h *= 1099511628211ull;
++            h ^= h >> 29;
++        };
++        mix(depth_addr);
++        mix(p.index_address);
++        mix(uint64_t(p.count) | (uint64_t(p.index_type) << 40));
++        mix(uint64_t(int64_t(p.base_vertex)));
++        mix(uint64_t(uint32_t(p.mode)));
++        mix(uint64_t(int64_t(p.first)));
++        mix(uint64_t(uint32_t(p.instances)));
++        return h;
++    }
++
++    // ---- skip_hidden (experimental; from PR #47, its level 1) ------------------------------------------------------
++    // Frame captures (Mali-G57): most draws of the big world passes cover no pixel at all yet are still vertex-shaded
++    // and tiled. Draws of the world passes get an occlusion query; its result (read when the submission has finished)
++    // says whether the draw produced any sample. A draw that produced none twice running is left out, and is drawn
++    // again (with a query) every kOccRetest frames (staggered by key), so something that comes into view shows up a few
++    // frames late at most. A draw is recognised by its shaders, index data, vertex buffer and target width (not the
++    // object's constants, which change every frame while the camera moves: draws sharing a mesh share a key, and the
++    // key counts as hidden only when none of them produced a sample).
++    struct OccState {
++        uint32_t last_test = 0;  // frame of the last draw that had a query
++        uint32_t last_seen = 0;
++        uint8_t hidden = 0;      // consecutive tests with no samples
++        bool veto = false;       // a draw of this key was drawn without a query: its visibility is unknown
++        uint64_t test_seq = 0;   // gentle: the submission whose query result settles the last retest
++    };
++    static constexpr uint32_t kOccQueries = 2048;
++    static constexpr uint8_t kOccHiddenTests = 2;
++    static constexpr uint32_t kOccRetest = 3;
++    std::unordered_map<uint64_t, OccState> occ_state_;
++    uint32_t occ_frame_ = 0;
++    uint64_t occ_skipped_ = 0, occ_queried_ = 0, occ_judged_ = 0, occ_woke_ = 0;
++    std::vector<uint64_t> occ_results_;
++    std::unordered_map<uint64_t, bool> occ_agg_;
++    // Only opaque world geometry: indexed triangles (lists or strips), depth tested, into a depth target at least 256
++    // wide, no stencil, no blending, writing colour or depth. Everything else (the game's own visibility tests, effects)
++    // is always drawn.
++    bool OccCandidate(const DrawParams& p, const std::vector<Image*>& colors, const Image* depth, bool shader_depth_test) {
++        if (shader_depth_test || p.index_type < 0 || (p.mode != 4 && p.mode != 5) || p.count < 3) return false;
++        if (!depth || depth->width < 256 || !st_.depth.depth_test || st_.depth.stencil_test) return false;
++        if (st_.color.blend_enable != 0) return false;
++        return st_.depth.depth_write || (!colors.empty() && colors[0] && (st_.channel.mask & 0xF) != 0);
++    }
++    bool OccKey(const DrawParams& p, const VertexInput& vin, uint32_t target_w, uint64_t* out) {
++        if (!st_.program[0] || vin.bindings.empty()) return false;
++        uint64_t h = 1469598103934665603ull;
++        const auto mix = [&h](uint64_t v) {
++            h ^= v;
++            h *= 1099511628211ull;
++            h ^= h >> 29;
++        };
++        mix(st_.program[0]->hash);
++        mix(st_.program[1] ? st_.program[1]->hash : 0);
++        mix(uint64_t(p.count) | (uint64_t(p.index_type) << 40) | (uint64_t(st_.depth.depth_write) << 48));
++        mix(p.index_address);
++        mix(uint64_t(int64_t(p.base_vertex)));
++        mix(uint64_t(uint32_t(p.mode)));
++        mix(st_.vertex_buffers[vin.bindings[0].binding].address);
++        mix(uint64_t(target_w));
++        *out = h;
++        return true;
++    }
++    // skip_hidden 1 (gentle, the default): what popped in while the camera turns was geometry at the screen's edges,
++    // hidden only because it was off screen, whose retest came 3 frames later and its result 2 more. Now:
++    // - while the camera moves (its matrix, the first 64 bytes of a world draw's vertex constants, changed this
++    //   frame or in the last kOccStillFrames frames) nothing is left out: every draw is drawn, with a query;
++    // - a draw needs kOccGentleTests empty results in a row (not 2) before it is left out;
++    // - a retested draw stays drawn (without a query) until its result is in, so it never blinks in for a frame.
++    // skip_hidden 2 (aggressive) is the first version: more saving, more pop-in.
++    static constexpr uint8_t kOccGentleTests = 4;
++    static constexpr uint32_t kOccGentleRetest = 4;
++    static constexpr uint32_t kOccStillFrames = 8;
++    float occ_cam_[16] = {};
++    uint32_t occ_cam_frame_ = ~0u;  // frame of the last camera sample
++    uint32_t occ_still_ = 0;        // frames the camera has not moved
++    uint64_t occ_moving_frames_ = 0, occ_kept_ = 0;
++    // The camera of this frame's first world draw with a colour target: moved since the last sample?
++    void OccCamera() {
++        occ_cam_frame_ = occ_frame_;
++        const BufferRange& c3 = st_.uniforms[0][0];
++        if (!c3.address || c3.size < 64 || !GuestRangeValid(c3.address, 64)) return;
++        float m[16];
++        memcpy(m, reinterpret_cast<const void*>(c3.address), sizeof(m));
++        bool moved = false;
++        for (int i = 0; i < 16 && !moved; i++) {
++            const float d = std::fabs(m[i] - occ_cam_[i]);
++            moved = !(d <= 1e-4f * std::max(1.0f, std::fabs(m[i])));  // (NaN counts as moved)
++        }
++        memcpy(occ_cam_, m, sizeof(m));
++        if (moved) occ_still_ = 0;
++    }
++    // 0: draw, 1: draw with a query, 2: leave out.
++    int OccDecide(uint64_t key) {
++        if (occ_state_.size() > 40000) occ_state_.clear();  // keys that never repeat: start over
++        OccState& s = occ_state_[key];
++        s.last_seen = occ_frame_;
++        const bool gentle = dsr::GetRuntime().config.skip_hidden == 1;
++        if (s.hidden >= (gentle ? kOccGentleTests : kOccHiddenTests)) {
++            if (s.last_test == occ_frame_) return 1;  // every draw of this key on its retest frame
++            if (gentle && occ_still_ < kOccStillFrames) {  // the camera moves: drawn, and tested again
++                s.last_test = occ_frame_;
++                s.test_seq = submit_seq_ + 1;
++                occ_moving_frames_++;
++                return 1;
++            }
++            if (gentle && s.test_seq > completed_seq_) {  // its retest's result is not in yet: stays drawn
++                occ_kept_++;
++                return 0;
++            }
++            // Retests staggered by key, so the hidden geometry does not all come back on the same frame.
++            const uint32_t retest = gentle ? kOccGentleRetest : kOccRetest;
++            const uint32_t since = occ_frame_ - s.last_test;
++            if (since < retest || (occ_frame_ + uint32_t(key >> 7)) % retest != 0) return 2;
++            s.test_seq = submit_seq_ + 1;
++        }
++        s.last_test = occ_frame_;
++        return 1;
++    }
++    // The results of a finished submission's queries (its fence has signalled): render thread.
++    void CollectOcclusion(Slot& sl) {
++        const uint32_t n = std::min<uint32_t>(sl.occ_used, uint32_t(sl.occ_keys.size()));
++        sl.occ_used = 0;
++        if (!sl.occ || !n) {
++            sl.occ_keys.clear();
++            return;
++        }
++        std::vector<uint64_t>& res = occ_results_;
++        res.assign(size_t(n) * 2, 0);
++        const VkResult r = vkGetQueryPoolResults(device_, sl.occ, 0, n, res.size() * 8, res.data(), 16,
++                                                 VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
++        if (r == VK_SUCCESS || r == VK_NOT_READY) {
++            occ_agg_.clear();
++            for (uint32_t i = 0; i < n; i++) {
++                if (!res[size_t(i) * 2 + 1]) continue;  // never ran (the draw was dropped later)
++                bool& vis = occ_agg_[sl.occ_keys[i]];
++                vis = vis || res[size_t(i) * 2] != 0;
++            }
++            for (const auto& kv : occ_agg_) {
++                auto it = occ_state_.find(kv.first);
++                if (it == occ_state_.end()) continue;
++                if (kv.second || it->second.veto) {
++                    if (kv.second && it->second.hidden >= kOccHiddenTests) occ_woke_++;
++                    it->second.hidden = 0;
++                    it->second.veto = false;
++                } else if (it->second.hidden < 255) {
++                    it->second.hidden++;
++                }
++            }
++        }
++        sl.occ_keys.clear();
++    }
++
+     struct Slot {
+         VkCommandBuffer cmd = VK_NULL_HANDLE;
+         VkFence fence = VK_NULL_HANDLE;
+@@ -6972,6 +7338,9 @@ private:
+         std::vector<Readback> readbacks;
+         VkQueryPool ts = VK_NULL_HANDLE;  // GPU time of the submission (start, end)
+         bool ts_written = false;
++        VkQueryPool occ = VK_NULL_HANDLE;  // skip_hidden: occlusion queries of the submission's draws
++        uint32_t occ_used = 0;
++        std::vector<uint64_t> occ_keys;    // the draw key of each query
+         VkDescriptorPool pool = VK_NULL_HANDLE;
+         std::vector<VkDescriptorPool> extra_pools;  // when `pool` fills up (recorder thread)
+         std::vector<VkFramebuffer> framebuffers;    // render pass fallback: destroyed when the slot is reused
+diff --git a/src/platform/android/android_main.cpp b/src/platform/android/android_main.cpp
+index 05a9c2c..ff3af90 100644
+--- a/src/platform/android/android_main.cpp
++++ b/src/platform/android/android_main.cpp
+@@ -481,6 +481,8 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
+             else if (!strcmp(key, "hud_box")) cfg->hud_box = v != 0;
+             else if (!strcmp(key, "compositor_scaling")) cfg->compositor_scaling = v != 0;
+             else if (!strcmp(key, "max_anisotropy")) cfg->max_anisotropy = v;
++            else if (!strcmp(key, "geo_cache_mb")) cfg->geo_cache_mb = std::clamp(v, 32, 512);
++            else if (!strcmp(key, "anisotropy")) cfg->anisotropy = v < 0 ? -1 : std::min(v, 16);
+             else if (!strcmp(key, "shadow_compare")) cfg->shadow_compare = std::clamp(v, 0, 3);
+             else if (!strcmp(key, "game_hooks")) cfg->game_hooks = v != 0;
+             else if (!strcmp(key, "skip_intro")) cfg->skip_intro = v != 0;
+@@ -556,6 +558,19 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
+             } else if (!strcmp(key, "settings_version")) settings_version = v;
+             else if (!strcmp(key, "mali_barriers")) cfg->mali_barriers = v != 0;
+             else if (!strcmp(key, "performance_mode")) cfg->performance_mode = v != 0;
++            else if (!strcmp(key, "mali_tile_turbo")) {
++                cfg->mali_tile_turbo = v != 0;
++                if (v != 0) LOGI(kTag, "settings: mali_tile_turbo on (used on Mali GPUs only)");
++            } else if (!strcmp(key, "shadow_quality")) {
++                cfg->shadow_quality = std::clamp(v, 0, 3);
++                if (cfg->shadow_quality != 3) LOGI(kTag, "settings: shadow_quality %d", cfg->shadow_quality);
++            } else if (!strcmp(key, "skip_prepass")) {
++                cfg->skip_prepass = v != 0;
++                if (v != 0) LOGI(kTag, "settings: skip_prepass on (experimental)");
++            } else if (!strcmp(key, "skip_hidden")) {
++                cfg->skip_hidden = std::clamp(v, 0, 2);
++                if (cfg->skip_hidden) LOGI(kTag, "settings: skip_hidden %d (experimental)", cfg->skip_hidden);
++            }
+             else if (!strcmp(key, "texture_mip_skip")) cfg->texture_mip_skip = std::clamp(v, 0, 1);
+             else if (!strcmp(key, "texture_quality")) {
+                 cfg->texture_quality = v <= 0 ? 100 : std::clamp(v, 25, 100);  // unreadable / 0: the original quality
+diff --git a/src/runtime/hooks.cpp b/src/runtime/hooks.cpp
+index fe1cb55..f17ba30 100644
+--- a/src/runtime/hooks.cpp
++++ b/src/runtime/hooks.cpp
+@@ -218,15 +218,34 @@ void ApplyPerformanceMode(Runtime& rt, const GameBuild& b) {
+         done += done.empty() ? "low-quality effects" : ", low-quality effects";
+     else
+         LOGW("hooks", "performance mode: effects quality not changed (%s)", err.c_str());
++    if (rt.config.shadow_quality == 3) {  // shadow_quality 0-2 set their own size (ApplyShadowQuality)
++        int32_t* shadow = reinterpret_cast<int32_t*>(rt.main.base() + b.shadow_size);
++        if (rt.main.Contains(reinterpret_cast<uintptr_t>(shadow)) && *shadow == 2048) {
++            *shadow = 512;
++            done += done.empty() ? "shadow maps 512" : ", shadow maps 512";
++        } else {
++            LOGW("hooks", "performance mode: shadow map size not changed (found %d)",
++                 rt.main.Contains(reinterpret_cast<uintptr_t>(shadow)) ? *shadow : -1);
++        }
++    }
++    LOGI("hooks", "performance mode: %s", done.empty() ? "nothing applied" : done.c_str());
++}
++
++// Shadow quality (settings shadow_quality 0-2; from the 0.4.0 pull request #47): the shadow map size global the engine
++// sizes its shadow target from (see GameBuild::shadow_size) at 512 (0 and 1) or 1024 (2). With 0 the renderer also
++// leaves the shadow pass out and answers every lookup "lit" (vk_backend.cpp), so the small map only saves memory.
++void ApplyShadowQuality(Runtime& rt, const GameBuild& b) {
++    const int q = rt.config.shadow_quality;
++    if (q >= 3) return;
++    const int size = q == 2 ? 1024 : 512;
+     int32_t* shadow = reinterpret_cast<int32_t*>(rt.main.base() + b.shadow_size);
+     if (rt.main.Contains(reinterpret_cast<uintptr_t>(shadow)) && *shadow == 2048) {
+-        *shadow = 512;
+-        done += done.empty() ? "shadow maps 512" : ", shadow maps 512";
++        *shadow = size;
++        LOGI("hooks", "shadow quality %d: shadow maps %dx%d%s", q, size, size, q == 0 ? ", shadows off" : "");
+     } else {
+-        LOGW("hooks", "performance mode: shadow map size not changed (found %d)",
+-             rt.main.Contains(reinterpret_cast<uintptr_t>(shadow)) ? *shadow : -1);
++        LOGW("hooks", "shadow quality: shadow map size not changed (found %d)%s",
++             rt.main.Contains(reinterpret_cast<uintptr_t>(shadow)) ? *shadow : -1, q == 0 ? "; shadows still off" : "");
+     }
+-    LOGI("hooks", "performance mode: %s", done.empty() ? "nothing applied" : done.c_str());
+ }
+ 
+ // Lighter post-processing: no ambient occlusion, depth of field, camera motion blur or light shafts (see GameBuild).
+@@ -261,6 +280,61 @@ void ApplyLighterPostFx(Runtime& rt, const GameBuild& b) {
+     LOGI("hooks", "lighter post-processing: no ambient occlusion, depth of field, camera motion blur or light shafts");
+ }
+ 
++// Effect cluster overflow (a crash in the game itself). The render tasks draw a particle effect cluster
++// (FrpgFxClusterAppearance_Model.cpp) by writing each of its pieces into per-thread arrays with room for 384 (16, 4,
++// 4 and 64 bytes a piece at buffer+0x210, +0x1a10, +0x2010, +0x2610). The lock guarding the buffer lies right after
++// the last 64-byte slot (buffer+0x8618; 1.0.0 +0x8608). With more pieces the copy goes on past the end: piece 385's
++// matrix overwrites the lock, and unlocking it at the end of the function calls through that data (SIGSEGV on MTR_n,
++// pc main+0x624868 in DV 1.0.3; seen during a boss attack, with 390 pieces). The game does check the count, but only
++// to report "error !" (nothing in a release build), and 1.0.3 checks it against a limit at buffer+0x200 that is
++// larger than 384 (it let 390 through). The count is now clamped before the loop to 384 (1.0.3: and that limit),
++// in the register and in the stack copy the loop and the final draw read back: an oversized cluster shows its first
++// 384 pieces for that frame.
++struct FxClusterFix {
++    const char* build_id;
++    uint64_t at;
++    int n;
++    uint32_t from[9], to[9];
++};
++// 1.0.3: ldr w8,[x19,#0x200] / cmp w23,w8 / b.ls ok / adrp x0 / adrp x2 / add x0 / add x2 / mov w1,#444 / bl report
++//   ->   ldr w8,[x19,#0x200] / mov w9,#384 / cmp w8,w9 / csel w8,w8,w9,lo / cmp w23,w8 / csel w23,w23,w8,ls /
++//        str x23,[sp,#0x1e0] / nop / nop   (w9 is written again before it is next read)
++// 1.0.0 checks against 384 itself (cmp w23,#0x181); its report call (adrp x0 / adrp x2 / add x0, reached only when
++// the count is too large) -> mov w23,#384 / str x23,[sp,#0x308] / b past the report.
++#define FX103_TO {0xB9420268, 0x52803009, 0x6B09011F, 0x1A893108, 0x6B0802FF, 0x1A8892F7, 0xF900F3F7, kNop, kNop}
++const FxClusterFix kFxClusterFixes[] = {
++    {"5a797a3a", 0x628c5c, 3, {0xB0007C20, 0xB0007C22, 0x912BCC00}, {0x52803017, 0xF90187F7, 0x14000004}},
++    {"6569410c", 0x62398c, 9,
++     {0xB9420268, 0x6B0802FF, 0x540000E9, 0x90007BE0, 0x90007BE2, 0x9131D800, 0x91338C42, 0x52803781, 0x94057D00},
++     FX103_TO},
++    {"df3766a2", 0x62395c, 9,
++     {0xB9420268, 0x6B0802FF, 0x540000E9, 0xD0007C00, 0xD0007C02, 0x9133D800, 0x91358C42, 0x52803781, 0x94058339},
++     FX103_TO},
++};
++#undef FX103_TO
++
++void ApplyFxClusterFix(Runtime& rt) {
++    const FxClusterFix* f = nullptr;
++    for (const FxClusterFix& x : kFxClusterFixes)
++        if (rt.main_nso.build_id_hex.rfind(x.build_id, 0) == 0) f = &x;
++    if (!f) return;
++    for (int i = 0; i < f->n; ++i) {
++        const uint32_t* at = reinterpret_cast<const uint32_t*>(rt.main.base() + f->at + 4 * i);
++        if (!rt.main.Contains(reinterpret_cast<uintptr_t>(at)) || *at != f->from[i]) {
++            LOGW("hooks", "effect cluster fix not applied: main+0x%llx is not as expected",
++                 (unsigned long long)(f->at + 4 * i));
++            return;
++        }
++    }
++    std::string err;
++    for (int i = 0; i < f->n; ++i)
++        if (!rt.main.PatchInstruction(f->at + 4 * i, f->from[i], f->to[i], &err)) {
++            LOGW("hooks", "effect cluster fix: %s", err.c_str());
++            return;
++        }
++    LOGI("hooks", "effect cluster fix: effects with more than 384 pieces are drawn in part instead of overwriting memory");
++}
++
+ void SkipIntroLogos(Runtime& rt, const GameBuild& b) {
+     const LogoSkip* p = nullptr;
+     for (const LogoSkip& l : kLogoSkips)
+@@ -672,6 +746,7 @@ void InstallGameHooks() {
+             }
+         }
+     }
++    ApplyFxClusterFix(rt);
+     if (rt.config.skip_intro) SkipIntroLogos(rt, b);
+     // The experimental preset reuses only engine switches already identified and validated for this build.
+     // It is deliberately not described as full lighting/shadow shutdown: shadow rendering remains active.
+@@ -684,6 +759,7 @@ void InstallGameHooks() {
+         if (rt.config.performance_mode) ApplyPerformanceMode(rt, b);
+         if (rt.config.lighter_post_fx) ApplyLighterPostFx(rt, b);
+     }
++    ApplyShadowQuality(rt, b);
+     {
+         constexpr uint32_t kAdd2MiB = 0x11480108;  // add w8, w8, #0x200, lsl #12
+         constexpr uint32_t kAdd8MiB = 0x11600108;  // add w8, w8, #0x800, lsl #12
+diff --git a/src/runtime/runtime.h b/src/runtime/runtime.h
+index b2353a0..98fb303 100644
+--- a/src/runtime/runtime.h
++++ b/src/runtime/runtime.h
+@@ -115,6 +115,26 @@ struct RuntimeConfig {
+     // skip_intro = 1: the company logos at the start are skipped (straight to the title movie).
+     bool skip_intro = false;
+     int max_anisotropy = 0;  // limit on the game's anisotropic texture filtering (0 = the game's own level)
++    // anisotropy (settings menu "Anisotropic filtering"): -1 = as the game asks, 0 = off, 2 / 4 / 8 / 16 = that level on
++    // every mipmapped, linearly filtered texture (capped at the GPU's limit). Sharper textures at grazing angles
++    // (floors, walls, roads) for some GPU time.
++    int anisotropy = -1;
++    // geo_cache_mb (settings menu "Geometry cache"): size of the geometry cache (vertex / index data kept on the GPU
++    // across frames), 32-512 MB. Smaller uses less RAM but fills sooner (emptied and refilled: a short stall).
++    int geo_cache_mb = 192;
++    // shadow_quality: 0 = no shadows (the shadow map pass is not drawn, lookups say "lit"), 1 = 512, 2 = 1024,
++    // 3 = the game's 2048 (512 with performance_mode, as before).
++    int shadow_quality = 3;
++    // mali_tile_turbo (experimental, Mali GPUs only): image layout transitions scoped to the stages and accesses their
++    // layouts name, instead of waiting for / blocking all GPU work (vk_backend.cpp, LayoutScope).
++    bool mali_tile_turbo = false;
++    // skip_prepass (experimental, for Mali): the game's depth-only world pass is left out and the colour pass writes
++    // the depth instead (vk_backend.cpp, PrepassStat).
++    bool skip_prepass = false;
++    // skip_hidden (experimental): world draws that covered no pixel in recent frames (occlusion queries) are left
++    // out, retested every few frames (vk_backend.cpp, OccDecide). 1 = gentle (nothing left out while the camera moves),
++    // 2 = aggressive.
++    int skip_hidden = 0;
+     bool fast_cores = true;  // keep the game's frame-critical threads off the efficiency cores
+     bool record_thread = true;  // record Vulkan commands on a second thread (draw preparation stays on the render thread)
+     bool pin_render_thread = false;  // keep the render thread on the fastest CPU core(s) (slower on 8 Gen 2: off)
