@@ -1,0 +1,2362 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2f18278..b552754 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -31,8 +31,34 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64" OR ANDROID_ABI STREQUAL "arm64
+     set(DSR_ARM64 ON)
+ endif()
+ 
++# FSR 1 upscaler shaders (settings fsr): GLSL compiled to SPIR-V at build time with glslc, which the Android NDK ships
++# (shader-tools/) and the Vulkan SDK too (from pull request #47). Without it the build still works: FSR is left out
++# (DSR_HAVE_FSR1 not defined) and the picture is enlarged by the plain blit. (FXAA's SPIR-V is checked in:
++# src/hle/nvn/postfx_spv.h, from shaders/ by tools/gen_postfx_shaders.py.)
++set(DSR_GLSLC_HINTS)
++if(ANDROID AND ANDROID_NDK AND ANDROID_NDK_HOST_SYSTEM_NAME)
++  list(APPEND DSR_GLSLC_HINTS "${ANDROID_NDK}/shader-tools/${ANDROID_NDK_HOST_SYSTEM_NAME}")
++endif()
++find_program(DSR_GLSLC glslc HINTS ${DSR_GLSLC_HINTS} ENV VULKAN_SDK PATH_SUFFIXES Bin bin)
+ add_library(dsrcore OBJECT ${DSR_CORE_SOURCES})
+ target_include_directories(dsrcore PUBLIC src third_party/spirv)
++if(DSR_GLSLC)
++  set(DSR_GEN_DIR "${CMAKE_BINARY_DIR}/generated")
++  set(DSR_SHADERS_DIR "${CMAKE_SOURCE_DIR}/src/hle/nvn/shaders")
++  add_custom_command(OUTPUT "${DSR_GEN_DIR}/fsr1_spv.h"
++      COMMAND ${CMAKE_COMMAND} -DGLSLC=${DSR_GLSLC} -DSRC_DIR=${DSR_SHADERS_DIR} -DOUT=${DSR_GEN_DIR}/fsr1_spv.h
++              -DWORK=${DSR_GEN_DIR} -P "${CMAKE_SOURCE_DIR}/cmake/build_fsr1_spv.cmake"
++      DEPENDS "${DSR_SHADERS_DIR}/fsr1.vert" "${DSR_SHADERS_DIR}/fsr1_easu.frag" "${DSR_SHADERS_DIR}/fsr1_rcas.frag"
++              "${CMAKE_SOURCE_DIR}/cmake/build_fsr1_spv.cmake"
++      VERBATIM)
++  add_custom_target(dsr_fsr1_shaders DEPENDS "${DSR_GEN_DIR}/fsr1_spv.h")
++  add_dependencies(dsrcore dsr_fsr1_shaders)
++  target_include_directories(dsrcore PRIVATE "${DSR_GEN_DIR}")
++  target_compile_definitions(dsrcore PRIVATE DSR_HAVE_FSR1=1)
++  message(STATUS "dsr: FSR 1 shaders with ${DSR_GLSLC}")
++else()
++  message(WARNING "dsr: glslc not found: the FSR 1 upscaler is left out of this build")
++endif()
+ target_compile_options(dsrcore PRIVATE
+     -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wno-cast-function-type
+     $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
+diff --git a/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java b/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
+index 3486ba7..416e836 100644
+--- a/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
++++ b/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
+@@ -452,6 +452,11 @@ public final class SettingsMenu {
+                 "0");
+         renderScale();  // performance mode sets 75%; it can be moved freely afterwards
+         textureQuality();
++        toggle("sharp_hud", Strings.t("sharp_t"), Strings.t("sharp_n") + " " + Strings.t("changes_next"), "1", "0", "0");
++        choice("fxaa", Strings.t("fxaa_t"), Strings.t("fxaa_n") + " " + Strings.t("changes_next"),
++                new String[] {"0", "1", "2"},
++                new String[] {Strings.t("off"), Strings.t("fxaa_fast"), Strings.t("fxaa_quality")}, "0");
++        toggle("fsr", Strings.t("fsr_t"), Strings.t("fsr_n") + " " + Strings.t("changes_next"), "1", "0", "0");
+         toggle("lighter_post_fx", Strings.t("post_t"), Strings.t("post_n") + " " + Strings.t("changes_next"), "1", "0",
+                 "0");
+         toggle("lighting_lite", Strings.t("lighting_lite_t"), Strings.t("lighting_lite_n") + " "
+diff --git a/android/app/src/main/java/com/dsrnative/app/Strings.java b/android/app/src/main/java/com/dsrnative/app/Strings.java
+index 840c0f1..9587a47 100644
+--- a/android/app/src/main/java/com/dsrnative/app/Strings.java
++++ b/android/app/src/main/java/com/dsrnative/app/Strings.java
+@@ -487,6 +487,102 @@ final class Strings {
+                 "Guardado. Las opciones se aplican en el próximo inicio.", "Salvo. As opções valem a partir do próximo início.",
+                 "Сохранено. Параметры применятся при следующем запуске.", "保存しました。次回の起動時に反映されます。",
+                 "저장했습니다. 다음 시작 때 적용됩니다.", "已保存。选项将在下次启动时生效。", "已儲存。選項將在下次啟動時生效。");
++        put("sharp_t",
++                "Sharp HUD and text",
++                "HUD et texte nets",
++                "Scharfes HUD und Text",
++                "HUD e testo nitidi",
++                "HUD y texto nítidos",
++                "HUD e texto nítidos",
++                "Чёткий интерфейс и текст",
++                "くっきりした HUD と文字",
++                "선명한 HUD와 글자",
++                "清晰的 HUD 和文字",
++                "清晰的 HUD 和文字");
++        put("sharp_n",
++                "Only with a render resolution below 100%: the HUD, menus and text are still drawn at your screen's resolution (up to 1080p) instead of the lower one, so they stay sharp. Costs a little GPU time.",
++                "Avec une résolution de rendu inférieure à 100 %, le HUD, les menus et le texte restent dessinés à la résolution de votre écran (jusqu'à 1080p) au lieu de la plus basse : ils restent nets. Coûte un peu de temps GPU.",
++                "Bei einer Renderauflösung unter 100 % werden HUD, Menüs und Text weiter in der Auflösung deines Bildschirms (bis 1080p) gezeichnet statt in der niedrigeren, damit sie scharf bleiben. Kostet etwas GPU-Zeit.",
++                "Con una risoluzione di rendering sotto il 100%, HUD, menu e testo vengono comunque disegnati alla risoluzione dello schermo (fino a 1080p) invece che a quella più bassa, così restano nitidi. Costa un po' di tempo GPU.",
++                "Con una resolución de renderizado inferior al 100 %, el HUD, los menús y el texto se siguen dibujando a la resolución de tu pantalla (hasta 1080p) en lugar de la más baja, para que se vean nítidos. Cuesta algo de tiempo de GPU.",
++                "Com uma resolução de renderização abaixo de 100%, o HUD, os menus e o texto continuam sendo desenhados na resolução da tela (até 1080p) em vez da mais baixa, para ficarem nítidos. Custa um pouco de tempo de GPU.",
++                "При разрешении рендеринга ниже 100% интерфейс, меню и текст всё равно рисуются в разрешении экрана (до 1080p), а не в пониженном, и остаются чёткими. Немного нагружает GPU.",
++                "レンダリング解像度が 100% 未満のとき、HUD・メニュー・文字は低い解像度ではなく画面の解像度 (最大 1080p) で描かれ、くっきり表示されます。GPU の負荷が少し増えます。",
++                "렌더링 해상도가 100% 미만일 때 HUD, 메뉴, 글자는 낮은 해상도 대신 화면 해상도(최대 1080p)로 그려져 선명하게 유지됩니다. GPU 시간이 약간 더 듭니다.",
++                "渲染分辨率低于 100% 时，HUD、菜单和文字仍以屏幕分辨率（最高 1080p）绘制，而不是较低的分辨率，因此保持清晰。会稍微增加 GPU 负担。",
++                "渲染解析度低於 100% 時，HUD、選單和文字仍以螢幕解析度（最高 1080p）繪製，而非較低的解析度，因此保持清晰。會稍微增加 GPU 負擔。");
++        put("fxaa_t",
++                "Anti-aliasing (FXAA)",
++                "Anticrénelage (FXAA)",
++                "Kantenglättung (FXAA)",
++                "Anti-aliasing (FXAA)",
++                "Antialiasing (FXAA)",
++                "Anti-aliasing (FXAA)",
++                "Сглаживание (FXAA)",
++                "アンチエイリアス (FXAA)",
++                "안티에일리어싱 (FXAA)",
++                "抗锯齿 (FXAA)",
++                "反鋸齒 (FXAA)");
++        put("fxaa_n",
++                "Smooths the jagged edges of the 3D picture before it is enlarged to the screen (FXAA 3.11). Fast is the light one, for Mali GPUs. Also draws the HUD and text sharp.",
++                "Adoucit les contours crénelés de l'image 3D avant son agrandissement à l'écran (FXAA 3.11). Rapide est la version légère, pour les GPU Mali. Dessine aussi le HUD et le texte nets.",
++                "Glättet die gezackten Kanten des 3D-Bildes, bevor es auf den Bildschirm vergrößert wird (FXAA 3.11). Schnell ist die leichte Variante, für Mali-GPUs. Zeichnet auch HUD und Text scharf.",
++                "Leviga i bordi seghettati dell'immagine 3D prima che venga ingrandita sullo schermo (FXAA 3.11). Veloce è la versione leggera, per GPU Mali. Disegna anche HUD e testo nitidi.",
++                "Suaviza los bordes dentados de la imagen 3D antes de ampliarla a la pantalla (FXAA 3.11). Rápido es la versión ligera, para GPU Mali. También dibuja el HUD y el texto nítidos.",
++                "Suaviza as bordas serrilhadas da imagem 3D antes de ser ampliada para a tela (FXAA 3.11). Rápido é a versão leve, para GPUs Mali. Também desenha o HUD e o texto nítidos.",
++                "Сглаживает зубчатые края 3D-изображения перед его увеличением до размера экрана (FXAA 3.11). «Быстро» — лёгкий вариант для GPU Mali. Также делает интерфейс и текст чёткими.",
++                "3D 映像を画面に拡大する前に、ギザギザの輪郭を滑らかにします (FXAA 3.11)。高速は Mali GPU 向けの軽量版です。HUD と文字もくっきり描画されます。",
++                "3D 화면을 화면 크기로 확대하기 전에 계단 현상을 부드럽게 합니다(FXAA 3.11). 빠름은 Mali GPU용 가벼운 방식입니다. HUD와 글자도 선명하게 그려집니다.",
++                "在 3D 画面放大到屏幕之前平滑锯齿边缘（FXAA 3.11）。快速为轻量版，适合 Mali GPU。同时让 HUD 和文字保持清晰。",
++                "在 3D 畫面放大到螢幕之前平滑鋸齒邊緣（FXAA 3.11）。快速為輕量版，適合 Mali GPU。同時讓 HUD 和文字保持清晰。");
++        put("fxaa_fast",
++                "Fast",
++                "Rapide",
++                "Schnell",
++                "Veloce",
++                "Rápido",
++                "Rápido",
++                "Быстро",
++                "高速",
++                "빠름",
++                "快速",
++                "快速");
++        put("fxaa_quality",
++                "Quality",
++                "Qualité",
++                "Qualität",
++                "Qualità",
++                "Calidad",
++                "Qualidade",
++                "Качество",
++                "高品質",
++                "품질",
++                "画质",
++                "畫質");
++        put("fsr_t",
++                "FSR 1 upscaling",
++                "Mise à l'échelle FSR 1",
++                "FSR-1-Hochskalierung",
++                "Upscaling FSR 1",
++                "Escalado FSR 1",
++                "Upscaling FSR 1",
++                "Масштабирование FSR 1",
++                "FSR 1 アップスケーリング",
++                "FSR 1 업스케일링",
++                "FSR 1 超分辨率",
++                "FSR 1 超解析度");
++        put("fsr_n",
++                "Enlarges the 3D picture to the screen with AMD FSR 1 (edge-adaptive upscaling and sharpening) instead of a plain stretch: sharper at a low render resolution, but costs some GPU time. Also draws the HUD and text sharp.",
++                "Agrandit l'image 3D à l'écran avec AMD FSR 1 (mise à l'échelle adaptative aux contours et accentuation) au lieu d'un simple étirement : plus net à basse résolution de rendu, mais coûte du temps GPU. Dessine aussi le HUD et le texte nets.",
++                "Vergrößert das 3D-Bild mit AMD FSR 1 (kantenadaptive Hochskalierung und Schärfung) statt einfacher Streckung auf den Bildschirm: schärfer bei niedriger Renderauflösung, kostet aber etwas GPU-Zeit. Zeichnet auch HUD und Text scharf.",
++                "Ingrandisce l'immagine 3D sullo schermo con AMD FSR 1 (upscaling adattivo ai bordi e nitidezza) invece di un semplice allungamento: più nitida a bassa risoluzione di rendering, ma costa tempo GPU. Disegna anche HUD e testo nitidi.",
++                "Amplía la imagen 3D a la pantalla con AMD FSR 1 (escalado adaptativo a los bordes y nitidez) en lugar de un simple estiramiento: más nítida a baja resolución de renderizado, pero cuesta tiempo de GPU. También dibuja el HUD y el texto nítidos.",
++                "Amplia a imagem 3D para a tela com AMD FSR 1 (upscaling adaptativo às bordas e nitidez) em vez de um simples esticamento: mais nítida em baixa resolução de renderização, mas custa tempo de GPU. Também desenha o HUD e o texto nítidos.",
++                "Увеличивает 3D-изображение до размера экрана с помощью AMD FSR 1 (масштабирование с учётом краёв и повышение резкости) вместо простого растяжения: чётче при низком разрешении рендеринга, но нагружает GPU. Также делает интерфейс и текст чёткими.",
++                "3D 映像を単純な引き伸ばしではなく AMD FSR 1 (輪郭適応アップスケーリングとシャープ化) で画面に拡大します。低いレンダリング解像度でもくっきりしますが、GPU 負荷が増えます。HUD と文字もくっきり描画されます。",
++                "3D 화면을 단순히 늘리는 대신 AMD FSR 1(윤곽 적응형 업스케일링과 샤프닝)로 화면에 확대합니다. 낮은 렌더링 해상도에서 더 선명하지만 GPU 시간이 듭니다. HUD와 글자도 선명하게 그려집니다.",
++                "使用 AMD FSR 1（边缘自适应放大与锐化）而非简单拉伸将 3D 画面放大到屏幕：在低渲染分辨率下更清晰，但会消耗一些 GPU 性能。同时让 HUD 和文字保持清晰。",
++                "使用 AMD FSR 1（邊緣自適應放大與銳化）而非簡單拉伸將 3D 畫面放大到螢幕：在低渲染解析度下更清晰，但會消耗一些 GPU 效能。同時讓 HUD 和文字保持清晰。");
+         put("sec_gpu", "GPU options", "Options GPU", "GPU-Optionen", "Opzioni GPU", "Opciones de GPU", "Opções de GPU",
+                 "Параметры GPU", "GPU オプション", "GPU 옵션", "GPU 选项", "GPU 選項");
+         put("gpu_n", "For GPUs such as Mali that lack the game's texture formats or draw in tiles. Off unless you are testing.",
+diff --git a/cmake/build_fsr1_spv.cmake b/cmake/build_fsr1_spv.cmake
+new file mode 100644
+index 0000000..b2f997c
+--- /dev/null
++++ b/cmake/build_fsr1_spv.cmake
+@@ -0,0 +1,21 @@
++# Compiles the FSR 1 shaders with glslc and writes them as byte arrays into one header (run by CMakeLists.txt).
++# From pull request #47 (fernanfez00). Inputs: -DGLSLC=<glslc> -DSRC_DIR=<shader folder> -DOUT=<header> -DWORK=<scratch>
++file(MAKE_DIRECTORY "${WORK}")
++set(_names fsr1.vert fsr1_easu.frag fsr1_rcas.frag)
++set(_syms kFsr1VertSpv kFsr1EasuSpv kFsr1RcasSpv)
++set(_out "// Generated by cmake/build_fsr1_spv.cmake: do not edit.\n#pragma once\n")
++list(LENGTH _names _n)
++math(EXPR _last "${_n} - 1")
++foreach(i RANGE ${_last})
++  list(GET _names ${i} _name)
++  list(GET _syms ${i} _sym)
++  execute_process(COMMAND "${GLSLC}" -O --target-env=vulkan1.0 -o "${WORK}/${_name}.spv" "${SRC_DIR}/${_name}"
++                  RESULT_VARIABLE _r ERROR_VARIABLE _e)
++  if(NOT _r EQUAL 0)
++    message(FATAL_ERROR "glslc failed on ${_name}:\n${_e}")
++  endif()
++  file(READ "${WORK}/${_name}.spv" _hex HEX)
++  string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _bytes "${_hex}")
++  string(APPEND _out "alignas(4) static const unsigned char ${_sym}[] = {${_bytes}};\n")
++endforeach()
++file(WRITE "${OUT}" "${_out}")
+diff --git a/shaders/fullscreen.vert b/shaders/fullscreen.vert
+new file mode 100644
+index 0000000..97917c9
+--- /dev/null
++++ b/shaders/fullscreen.vert
+@@ -0,0 +1,6 @@
++#version 450
++// One triangle that covers the whole target (no vertex buffers).
++void main() {
++    vec2 p = vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2));
++    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
++}
+diff --git a/shaders/fxaa.frag b/shaders/fxaa.frag
+new file mode 100644
+index 0000000..769c6b4
+--- /dev/null
++++ b/shaders/fxaa.frag
+@@ -0,0 +1,59 @@
++#version 450
++// FXAA 3.11 Quality (Timothy Lottes), edge thresholds 0.0312 / 0.063, no sub-pixel blur: edges are smoothed and textures
++// stay sharp. Ported from gu-native's "fxaa.frag" (runtime/nvn/vulkan/shaders.c) with the luma taken from the colour
++// (the game's own FXAA pass keeps it in alpha there). FXAA_STEPS 12 = quality, 6 = fast (for a Mali).
++// Runs at the game's render size, before the picture is enlarged.
++#ifndef FXAA_STEPS
++#define FXAA_STEPS 12
++#endif
++layout(set = 0, binding = 0) uniform sampler2D t;
++layout(location = 0) out vec4 o;
++layout(push_constant) uniform Push { uint perceptual; } pc;  // 1: linear values (sRGB / float format): luma in gamma 2.0
++
++#if FXAA_STEPS == 12
++const float STEP[12] = float[](1.0, 1.0, 1.0, 1.0, 1.0, 1.5, 2.0, 2.0, 2.0, 2.0, 4.0, 8.0);
++#else
++const float STEP[6] = float[](1.0, 1.5, 2.0, 2.0, 4.0, 12.0);
++#endif
++float LUMA(vec3 c) {
++    if (pc.perceptual != 0u) c = sqrt(max(c, vec3(0.0)));
++    return dot(c, vec3(0.299, 0.587, 0.114));
++}
++float luma(vec2 uv) { return LUMA(textureLod(t, uv, 0.0).rgb); }
++#define AT(x, y) LUMA(textureLodOffset(t, pos, 0.0, ivec2(x, y)).rgb)
++void main() {
++    vec2 rcp = 1.0 / vec2(textureSize(t, 0)), pos = gl_FragCoord.xy * rcp;
++    vec4 rgbaM = textureLod(t, pos, 0.0);
++    float lumaM = LUMA(rgbaM.rgb), lumaN = AT(0, -1), lumaS = AT(0, 1), lumaW = AT(-1, 0), lumaE = AT(1, 0);
++    float rangeMax = max(max(max(lumaN, lumaW), max(lumaE, lumaS)), lumaM);
++    float range = rangeMax - min(min(min(lumaN, lumaW), min(lumaE, lumaS)), lumaM);
++    if (range < max(0.0312, rangeMax * 0.063)) { o = rgbaM; return; }
++    float lumaNW = AT(-1, -1), lumaNE = AT(1, -1), lumaSW = AT(-1, 1), lumaSE = AT(1, 1);
++    float lumaNS = lumaN + lumaS, lumaWE = lumaW + lumaE;
++    float edgeHorz = abs(lumaNW + lumaSW - 2.0 * lumaW) + 2.0 * abs(lumaNS - 2.0 * lumaM) + abs(lumaNE + lumaSE - 2.0 * lumaE);
++    float edgeVert = abs(lumaSW + lumaSE - 2.0 * lumaS) + 2.0 * abs(lumaWE - 2.0 * lumaM) + abs(lumaNW + lumaNE - 2.0 * lumaN);
++    bool horzSpan = edgeHorz >= edgeVert;
++    float lengthSign = horzSpan ? rcp.y : rcp.x;
++    if (!horzSpan) { lumaN = lumaW; lumaS = lumaE; }
++    float gradientN = lumaN - lumaM, gradientS = lumaS - lumaM;
++    bool pairN = abs(gradientN) >= abs(gradientS);
++    float gradientScaled = max(abs(gradientN), abs(gradientS)) * 0.25;
++    if (pairN) lengthSign = -lengthSign;
++    float lumaHalf = ((pairN ? lumaN : lumaS) + lumaM) * 0.5;
++    vec2 posB = pos + (horzSpan ? vec2(0.0, lengthSign) : vec2(lengthSign, 0.0)) * 0.5;
++    vec2 off = horzSpan ? vec2(rcp.x, 0.0) : vec2(0.0, rcp.y);
++    vec2 posN = posB - off * STEP[0], posP = posB + off * STEP[0];
++    float endN = luma(posN) - lumaHalf, endP = luma(posP) - lumaHalf;
++    bool doneN = abs(endN) >= gradientScaled, doneP = abs(endP) >= gradientScaled;
++    for (int i = 1; i < FXAA_STEPS && !(doneN && doneP); i++) {
++        if (!doneN) posN -= off * STEP[i];
++        if (!doneP) posP += off * STEP[i];
++        if (i == FXAA_STEPS - 1) break;  // the last step is taken without a look
++        if (!doneN) { endN = luma(posN) - lumaHalf; doneN = abs(endN) >= gradientScaled; }
++        if (!doneP) { endP = luma(posP) - lumaHalf; doneP = abs(endP) >= gradientScaled; }
++    }
++    float dstN = horzSpan ? pos.x - posN.x : pos.y - posN.y, dstP = horzSpan ? posP.x - pos.x : posP.y - pos.y;
++    bool goodSpan = ((dstN < dstP ? endN : endP) < 0.0) != (lumaM < lumaHalf);
++    float offset = (goodSpan ? 0.5 - min(dstN, dstP) / (dstN + dstP) : 0.0) * lengthSign;
++    o = vec4(textureLod(t, pos + (horzSpan ? vec2(0.0, offset) : vec2(offset, 0.0)), 0.0).rgb, rgbaM.a);
++}
+diff --git a/src/hle/nvn/postfx_spv.h b/src/hle/nvn/postfx_spv.h
+new file mode 100644
+index 0000000..4e87bc9
+--- /dev/null
++++ b/src/hle/nvn/postfx_spv.h
+@@ -0,0 +1,820 @@
++// GENERATED by tools/gen_postfx_shaders.py from shaders/*: do not edit by hand.
++// SPIR-V (Vulkan 1.1, capabilities Shader and ImageQuery only) of the post-processing passes
++// (FXAA 3.11, ported from gu-native).
++#pragma once
++#include <cstddef>
++#include <cstdint>
++
++namespace dsr::hle::nvn::postfx_spv {
++
++// fullscreen.vert
++inline constexpr uint32_t kFullscreenVert[] = {
++    0x07230203, 0x00010300, 0x0008000b, 0x0000002b, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
++    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
++    0x0007000f, 0x00000000, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000c, 0x0000001d, 0x00030003,
++    0x00000002, 0x000001c2, 0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00030005, 0x00000009,
++    0x00000070, 0x00060005, 0x0000000c, 0x565f6c67, 0x65747265, 0x646e4978, 0x00007865, 0x00060005,
++    0x0000001b, 0x505f6c67, 0x65567265, 0x78657472, 0x00000000, 0x00060006, 0x0000001b, 0x00000000,
++    0x505f6c67, 0x7469736f, 0x006e6f69, 0x00070006, 0x0000001b, 0x00000001, 0x505f6c67, 0x746e696f,
++    0x657a6953, 0x00000000, 0x00070006, 0x0000001b, 0x00000002, 0x435f6c67, 0x4470696c, 0x61747369,
++    0x0065636e, 0x00070006, 0x0000001b, 0x00000003, 0x435f6c67, 0x446c6c75, 0x61747369, 0x0065636e,
++    0x00030005, 0x0000001d, 0x00000000, 0x00040047, 0x0000000c, 0x0000000b, 0x0000002a, 0x00030047,
++    0x0000001b, 0x00000002, 0x00050048, 0x0000001b, 0x00000000, 0x0000000b, 0x00000000, 0x00050048,
++    0x0000001b, 0x00000001, 0x0000000b, 0x00000001, 0x00050048, 0x0000001b, 0x00000002, 0x0000000b,
++    0x00000003, 0x00050048, 0x0000001b, 0x00000003, 0x0000000b, 0x00000004, 0x00020013, 0x00000002,
++    0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007,
++    0x00000006, 0x00000002, 0x00040020, 0x00000008, 0x00000007, 0x00000007, 0x00040015, 0x0000000a,
++    0x00000020, 0x00000001, 0x00040020, 0x0000000b, 0x00000001, 0x0000000a, 0x0004003b, 0x0000000b,
++    0x0000000c, 0x00000001, 0x0004002b, 0x0000000a, 0x0000000e, 0x00000001, 0x0004002b, 0x0000000a,
++    0x00000010, 0x00000002, 0x00040017, 0x00000017, 0x00000006, 0x00000004, 0x00040015, 0x00000018,
++    0x00000020, 0x00000000, 0x0004002b, 0x00000018, 0x00000019, 0x00000001, 0x0004001c, 0x0000001a,
++    0x00000006, 0x00000019, 0x0006001e, 0x0000001b, 0x00000017, 0x00000006, 0x0000001a, 0x0000001a,
++    0x00040020, 0x0000001c, 0x00000003, 0x0000001b, 0x0004003b, 0x0000001c, 0x0000001d, 0x00000003,
++    0x0004002b, 0x0000000a, 0x0000001e, 0x00000000, 0x0004002b, 0x00000006, 0x00000020, 0x40000000,
++    0x0004002b, 0x00000006, 0x00000022, 0x3f800000, 0x0004002b, 0x00000006, 0x00000025, 0x00000000,
++    0x00040020, 0x00000029, 0x00000003, 0x00000017, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
++    0x00000003, 0x000200f8, 0x00000005, 0x0004003b, 0x00000008, 0x00000009, 0x00000007, 0x0004003d,
++    0x0000000a, 0x0000000d, 0x0000000c, 0x000500c4, 0x0000000a, 0x0000000f, 0x0000000d, 0x0000000e,
++    0x000500c7, 0x0000000a, 0x00000011, 0x0000000f, 0x00000010, 0x0004006f, 0x00000006, 0x00000012,
++    0x00000011, 0x0004003d, 0x0000000a, 0x00000013, 0x0000000c, 0x000500c7, 0x0000000a, 0x00000014,
++    0x00000013, 0x00000010, 0x0004006f, 0x00000006, 0x00000015, 0x00000014, 0x00050050, 0x00000007,
++    0x00000016, 0x00000012, 0x00000015, 0x0003003e, 0x00000009, 0x00000016, 0x0004003d, 0x00000007,
++    0x0000001f, 0x00000009, 0x0005008e, 0x00000007, 0x00000021, 0x0000001f, 0x00000020, 0x00050050,
++    0x00000007, 0x00000023, 0x00000022, 0x00000022, 0x00050083, 0x00000007, 0x00000024, 0x00000021,
++    0x00000023, 0x00050051, 0x00000006, 0x00000026, 0x00000024, 0x00000000, 0x00050051, 0x00000006,
++    0x00000027, 0x00000024, 0x00000001, 0x00070050, 0x00000017, 0x00000028, 0x00000026, 0x00000027,
++    0x00000025, 0x00000022, 0x00050041, 0x00000029, 0x0000002a, 0x0000001d, 0x0000001e, 0x0003003e,
++    0x0000002a, 0x00000028, 0x000100fd, 0x00010038,
++};
++inline constexpr size_t kFullscreenVertSize = sizeof(kFullscreenVert);
++
++// fxaa.frag (FXAA_STEPS=12)
++inline constexpr uint32_t kFxaaQualityFrag[] = {
++    0x07230203, 0x00010300, 0x0008000b, 0x0000020f, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
++    0x00000032, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
++    0x00000000, 0x00000001, 0x0007000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000046,
++    0x00000098, 0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005,
++    0x00000004, 0x6e69616d, 0x00000000, 0x00050005, 0x0000000b, 0x414d554c, 0x33667628, 0x0000003b,
++    0x00030005, 0x0000000a, 0x00000063, 0x00050005, 0x00000011, 0x616d756c, 0x32667628, 0x0000003b,
++    0x00030005, 0x00000010, 0x00007675, 0x00040005, 0x00000014, 0x68737550, 0x00000000, 0x00060006,
++    0x00000014, 0x00000000, 0x63726570, 0x75747065, 0x00006c61, 0x00030005, 0x00000016, 0x00006370,
++    0x00030005, 0x00000031, 0x00000074, 0x00040005, 0x00000036, 0x61726170, 0x0000006d, 0x00030005,
++    0x0000003b, 0x00706372, 0x00030005, 0x00000044, 0x00736f70, 0x00060005, 0x00000046, 0x465f6c67,
++    0x43676172, 0x64726f6f, 0x00000000, 0x00040005, 0x0000004c, 0x61626772, 0x0000004d, 0x00040005,
++    0x00000051, 0x616d756c, 0x0000004d, 0x00040005, 0x00000052, 0x61726170, 0x0000006d, 0x00040005,
++    0x00000056, 0x616d756c, 0x0000004e, 0x00040005, 0x0000005c, 0x61726170, 0x0000006d, 0x00040005,
++    0x0000005f, 0x616d756c, 0x00000053, 0x00040005, 0x00000065, 0x61726170, 0x0000006d, 0x00040005,
++    0x00000068, 0x616d756c, 0x00000057, 0x00040005, 0x0000006d, 0x61726170, 0x0000006d, 0x00040005,
++    0x00000070, 0x616d756c, 0x00000045, 0x00040005, 0x00000075, 0x61726170, 0x0000006d, 0x00050005,
++    0x00000078, 0x676e6172, 0x78614d65, 0x00000000, 0x00040005, 0x00000082, 0x676e6172, 0x00000065,
++    0x00030005, 0x00000098, 0x0000006f, 0x00040005, 0x0000009b, 0x616d756c, 0x0000574e, 0x00040005,
++    0x000000a0, 0x61726170, 0x0000006d, 0x00040005, 0x000000a3, 0x616d756c, 0x0000454e, 0x00040005,
++    0x000000a8, 0x61726170, 0x0000006d, 0x00040005, 0x000000ab, 0x616d756c, 0x00005753, 0x00040005,
++    0x000000b0, 0x61726170, 0x0000006d, 0x00040005, 0x000000b3, 0x616d756c, 0x00004553, 0x00040005,
++    0x000000b8, 0x61726170, 0x0000006d, 0x00040005, 0x000000bb, 0x616d756c, 0x0000534e, 0x00040005,
++    0x000000bf, 0x616d756c, 0x00004557, 0x00050005, 0x000000c3, 0x65676465, 0x7a726f48, 0x00000000,
++    0x00050005, 0x000000db, 0x65676465, 0x74726556, 0x00000000, 0x00050005, 0x000000f3, 0x7a726f68,
++    0x6e617053, 0x00000000, 0x00050005, 0x000000f7, 0x676e656c, 0x69536874, 0x00006e67, 0x00050005,
++    0x00000109, 0x64617267, 0x746e6569, 0x0000004e, 0x00050005, 0x0000010d, 0x64617267, 0x746e6569,
++    0x00000053, 0x00040005, 0x00000111, 0x72696170, 0x0000004e, 0x00060005, 0x00000117, 0x64617267,
++    0x746e6569, 0x6c616353, 0x00006465, 0x00050005, 0x00000124, 0x616d756c, 0x666c6148, 0x00000000,
++    0x00040005, 0x0000012d, 0x42736f70, 0x00000000, 0x00030005, 0x0000013b, 0x0066666f, 0x00040005,
++    0x00000148, 0x4e736f70, 0x00000000, 0x00040005, 0x0000014d, 0x50736f70, 0x00000000, 0x00040005,
++    0x00000152, 0x4e646e65, 0x00000000, 0x00040005, 0x00000153, 0x61726170, 0x0000006d, 0x00040005,
++    0x00000158, 0x50646e65, 0x00000000, 0x00040005, 0x00000159, 0x61726170, 0x0000006d, 0x00040005,
++    0x0000015e, 0x656e6f64, 0x0000004e, 0x00040005, 0x00000163, 0x656e6f64, 0x00000050, 0x00030005,
++    0x00000169, 0x00000069, 0x00050005, 0x00000186, 0x65646e69, 0x6c626178, 0x00000065, 0x00050005,
++    0x00000192, 0x65646e69, 0x6c626178, 0x00000065, 0x00040005, 0x000001a2, 0x61726170, 0x0000006d,
++    0x00040005, 0x000001af, 0x61726170, 0x0000006d, 0x00040005, 0x000001ba, 0x4e747364, 0x00000000,
++    0x00040005, 0x000001cb, 0x50747364, 0x00000000, 0x00050005, 0x000001dc, 0x646f6f67, 0x6e617053,
++    0x00000000, 0x00040005, 0x000001e8, 0x7366666f, 0x00007465, 0x00030047, 0x00000014, 0x00000002,
++    0x00050048, 0x00000014, 0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x00000031, 0x00000021,
++    0x00000000, 0x00040047, 0x00000031, 0x00000022, 0x00000000, 0x00040047, 0x00000046, 0x0000000b,
++    0x0000000f, 0x00040047, 0x00000098, 0x0000001e, 0x00000000, 0x00020013, 0x00000002, 0x00030021,
++    0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006,
++    0x00000003, 0x00040020, 0x00000008, 0x00000007, 0x00000007, 0x00040021, 0x00000009, 0x00000006,
++    0x00000008, 0x00040017, 0x0000000d, 0x00000006, 0x00000002, 0x00040020, 0x0000000e, 0x00000007,
++    0x0000000d, 0x00040021, 0x0000000f, 0x00000006, 0x0000000e, 0x00040015, 0x00000013, 0x00000020,
++    0x00000000, 0x0003001e, 0x00000014, 0x00000013, 0x00040020, 0x00000015, 0x00000009, 0x00000014,
++    0x0004003b, 0x00000015, 0x00000016, 0x00000009, 0x00040015, 0x00000017, 0x00000020, 0x00000001,
++    0x0004002b, 0x00000017, 0x00000018, 0x00000000, 0x00040020, 0x00000019, 0x00000009, 0x00000013,
++    0x0004002b, 0x00000013, 0x0000001c, 0x00000000, 0x00020014, 0x0000001d, 0x0004002b, 0x00000006,
++    0x00000022, 0x00000000, 0x0006002c, 0x00000007, 0x00000023, 0x00000022, 0x00000022, 0x00000022,
++    0x0004002b, 0x00000006, 0x00000027, 0x3e991687, 0x0004002b, 0x00000006, 0x00000028, 0x3f1645a2,
++    0x0004002b, 0x00000006, 0x00000029, 0x3de978d5, 0x0006002c, 0x00000007, 0x0000002a, 0x00000027,
++    0x00000028, 0x00000029, 0x00090019, 0x0000002e, 0x00000006, 0x00000001, 0x00000000, 0x00000000,
++    0x00000000, 0x00000001, 0x00000000, 0x0003001b, 0x0000002f, 0x0000002e, 0x00040020, 0x00000030,
++    0x00000000, 0x0000002f, 0x0004003b, 0x00000030, 0x00000031, 0x00000000, 0x00040017, 0x00000034,
++    0x00000006, 0x00000004, 0x0004002b, 0x00000006, 0x0000003c, 0x3f800000, 0x00040017, 0x0000003f,
++    0x00000017, 0x00000002, 0x00040020, 0x00000045, 0x00000001, 0x00000034, 0x0004003b, 0x00000045,
++    0x00000046, 0x00000001, 0x00040020, 0x0000004b, 0x00000007, 0x00000034, 0x00040020, 0x00000050,
++    0x00000007, 0x00000006, 0x0004002b, 0x00000017, 0x00000059, 0xffffffff, 0x0005002c, 0x0000003f,
++    0x0000005a, 0x00000018, 0x00000059, 0x0004002b, 0x00000017, 0x00000062, 0x00000001, 0x0005002c,
++    0x0000003f, 0x00000063, 0x00000018, 0x00000062, 0x0005002c, 0x0000003f, 0x0000006b, 0x00000059,
++    0x00000018, 0x0005002c, 0x0000003f, 0x00000073, 0x00000062, 0x00000018, 0x0004002b, 0x00000006,
++    0x0000008f, 0x3cff9724, 0x0004002b, 0x00000006, 0x00000091, 0x3d810625, 0x00040020, 0x00000097,
++    0x00000003, 0x00000034, 0x0004003b, 0x00000097, 0x00000098, 0x00000003, 0x0005002c, 0x0000003f,
++    0x0000009e, 0x00000059, 0x00000059, 0x0005002c, 0x0000003f, 0x000000a6, 0x00000062, 0x00000059,
++    0x0005002c, 0x0000003f, 0x000000ae, 0x00000059, 0x00000062, 0x0005002c, 0x0000003f, 0x000000b6,
++    0x00000062, 0x00000062, 0x0004002b, 0x00000006, 0x000000c7, 0x40000000, 0x00040020, 0x000000f2,
++    0x00000007, 0x0000001d, 0x0004002b, 0x00000013, 0x000000fc, 0x00000001, 0x0004002b, 0x00000006,
++    0x0000011d, 0x3e800000, 0x0004002b, 0x00000006, 0x0000012b, 0x3f000000, 0x00040020, 0x00000168,
++    0x00000007, 0x00000017, 0x0004002b, 0x00000017, 0x00000170, 0x0000000c, 0x0004002b, 0x00000013,
++    0x0000017e, 0x0000000c, 0x0004001c, 0x0000017f, 0x00000006, 0x0000017e, 0x0004002b, 0x00000006,
++    0x00000180, 0x3fc00000, 0x0004002b, 0x00000006, 0x00000181, 0x40800000, 0x0004002b, 0x00000006,
++    0x00000182, 0x41000000, 0x000f002c, 0x0000017f, 0x00000183, 0x0000003c, 0x0000003c, 0x0000003c,
++    0x0000003c, 0x0000003c, 0x00000180, 0x000000c7, 0x000000c7, 0x000000c7, 0x000000c7, 0x00000181,
++    0x00000182, 0x00040020, 0x00000185, 0x00000007, 0x0000017f, 0x0004002b, 0x00000017, 0x00000199,
++    0x0000000b, 0x0004002b, 0x00000013, 0x00000208, 0x00000003, 0x00050036, 0x00000002, 0x00000004,
++    0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003b, 0x0000000e, 0x0000003b, 0x00000007,
++    0x0004003b, 0x0000000e, 0x00000044, 0x00000007, 0x0004003b, 0x0000004b, 0x0000004c, 0x00000007,
++    0x0004003b, 0x00000050, 0x00000051, 0x00000007, 0x0004003b, 0x00000008, 0x00000052, 0x00000007,
++    0x0004003b, 0x00000050, 0x00000056, 0x00000007, 0x0004003b, 0x00000008, 0x0000005c, 0x00000007,
++    0x0004003b, 0x00000050, 0x0000005f, 0x00000007, 0x0004003b, 0x00000008, 0x00000065, 0x00000007,
++    0x0004003b, 0x00000050, 0x00000068, 0x00000007, 0x0004003b, 0x00000008, 0x0000006d, 0x00000007,
++    0x0004003b, 0x00000050, 0x00000070, 0x00000007, 0x0004003b, 0x00000008, 0x00000075, 0x00000007,
++    0x0004003b, 0x00000050, 0x00000078, 0x00000007, 0x0004003b, 0x00000050, 0x00000082, 0x00000007,
++    0x0004003b, 0x00000050, 0x0000009b, 0x00000007, 0x0004003b, 0x00000008, 0x000000a0, 0x00000007,
++    0x0004003b, 0x00000050, 0x000000a3, 0x00000007, 0x0004003b, 0x00000008, 0x000000a8, 0x00000007,
++    0x0004003b, 0x00000050, 0x000000ab, 0x00000007, 0x0004003b, 0x00000008, 0x000000b0, 0x00000007,
++    0x0004003b, 0x00000050, 0x000000b3, 0x00000007, 0x0004003b, 0x00000008, 0x000000b8, 0x00000007,
++    0x0004003b, 0x00000050, 0x000000bb, 0x00000007, 0x0004003b, 0x00000050, 0x000000bf, 0x00000007,
++    0x0004003b, 0x00000050, 0x000000c3, 0x00000007, 0x0004003b, 0x00000050, 0x000000db, 0x00000007,
++    0x0004003b, 0x000000f2, 0x000000f3, 0x00000007, 0x0004003b, 0x00000050, 0x000000f7, 0x00000007,
++    0x0004003b, 0x00000050, 0x000000f9, 0x00000007, 0x0004003b, 0x00000050, 0x00000109, 0x00000007,
++    0x0004003b, 0x00000050, 0x0000010d, 0x00000007, 0x0004003b, 0x000000f2, 0x00000111, 0x00000007,
++    0x0004003b, 0x00000050, 0x00000117, 0x00000007, 0x0004003b, 0x00000050, 0x00000124, 0x00000007,
++    0x0004003b, 0x0000000e, 0x0000012d, 0x00000007, 0x0004003b, 0x0000000e, 0x00000130, 0x00000007,
++    0x0004003b, 0x0000000e, 0x0000013b, 0x00000007, 0x0004003b, 0x0000000e, 0x0000013d, 0x00000007,
++    0x0004003b, 0x0000000e, 0x00000148, 0x00000007, 0x0004003b, 0x0000000e, 0x0000014d, 0x00000007,
++    0x0004003b, 0x00000050, 0x00000152, 0x00000007, 0x0004003b, 0x0000000e, 0x00000153, 0x00000007,
++    0x0004003b, 0x00000050, 0x00000158, 0x00000007, 0x0004003b, 0x0000000e, 0x00000159, 0x00000007,
++    0x0004003b, 0x000000f2, 0x0000015e, 0x00000007, 0x0004003b, 0x000000f2, 0x00000163, 0x00000007,
++    0x0004003b, 0x00000168, 0x00000169, 0x00000007, 0x0004003b, 0x00000185, 0x00000186, 0x00000007,
++    0x0004003b, 0x00000185, 0x00000192, 0x00000007, 0x0004003b, 0x0000000e, 0x000001a2, 0x00000007,
++    0x0004003b, 0x0000000e, 0x000001af, 0x00000007, 0x0004003b, 0x00000050, 0x000001ba, 0x00000007,
++    0x0004003b, 0x00000050, 0x000001bc, 0x00000007, 0x0004003b, 0x00000050, 0x000001cb, 0x00000007,
++    0x0004003b, 0x00000050, 0x000001cd, 0x00000007, 0x0004003b, 0x000000f2, 0x000001dc, 0x00000007,
++    0x0004003b, 0x00000050, 0x000001e8, 0x00000007, 0x0004003b, 0x00000050, 0x000001ea, 0x00000007,
++    0x0004003b, 0x0000000e, 0x000001fc, 0x00000007, 0x0004003d, 0x0000002f, 0x0000003d, 0x00000031,
++    0x00040064, 0x0000002e, 0x0000003e, 0x0000003d, 0x00050067, 0x0000003f, 0x00000040, 0x0000003e,
++    0x00000018, 0x0004006f, 0x0000000d, 0x00000041, 0x00000040, 0x00050050, 0x0000000d, 0x00000042,
++    0x0000003c, 0x0000003c, 0x00050088, 0x0000000d, 0x00000043, 0x00000042, 0x00000041, 0x0003003e,
++    0x0000003b, 0x00000043, 0x0004003d, 0x00000034, 0x00000047, 0x00000046, 0x0007004f, 0x0000000d,
++    0x00000048, 0x00000047, 0x00000047, 0x00000000, 0x00000001, 0x0004003d, 0x0000000d, 0x00000049,
++    0x0000003b, 0x00050085, 0x0000000d, 0x0000004a, 0x00000048, 0x00000049, 0x0003003e, 0x00000044,
++    0x0000004a, 0x0004003d, 0x0000002f, 0x0000004d, 0x00000031, 0x0004003d, 0x0000000d, 0x0000004e,
++    0x00000044, 0x00070058, 0x00000034, 0x0000004f, 0x0000004d, 0x0000004e, 0x00000002, 0x00000022,
++    0x0003003e, 0x0000004c, 0x0000004f, 0x0004003d, 0x00000034, 0x00000053, 0x0000004c, 0x0008004f,
++    0x00000007, 0x00000054, 0x00000053, 0x00000053, 0x00000000, 0x00000001, 0x00000002, 0x0003003e,
++    0x00000052, 0x00000054, 0x00050039, 0x00000006, 0x00000055, 0x0000000b, 0x00000052, 0x0003003e,
++    0x00000051, 0x00000055, 0x0004003d, 0x0000002f, 0x00000057, 0x00000031, 0x0004003d, 0x0000000d,
++    0x00000058, 0x00000044, 0x00080058, 0x00000034, 0x0000005b, 0x00000057, 0x00000058, 0x0000000a,
++    0x00000022, 0x0000005a, 0x0008004f, 0x00000007, 0x0000005d, 0x0000005b, 0x0000005b, 0x00000000,
++    0x00000001, 0x00000002, 0x0003003e, 0x0000005c, 0x0000005d, 0x00050039, 0x00000006, 0x0000005e,
++    0x0000000b, 0x0000005c, 0x0003003e, 0x00000056, 0x0000005e, 0x0004003d, 0x0000002f, 0x00000060,
++    0x00000031, 0x0004003d, 0x0000000d, 0x00000061, 0x00000044, 0x00080058, 0x00000034, 0x00000064,
++    0x00000060, 0x00000061, 0x0000000a, 0x00000022, 0x00000063, 0x0008004f, 0x00000007, 0x00000066,
++    0x00000064, 0x00000064, 0x00000000, 0x00000001, 0x00000002, 0x0003003e, 0x00000065, 0x00000066,
++    0x00050039, 0x00000006, 0x00000067, 0x0000000b, 0x00000065, 0x0003003e, 0x0000005f, 0x00000067,
++    0x0004003d, 0x0000002f, 0x00000069, 0x00000031, 0x0004003d, 0x0000000d, 0x0000006a, 0x00000044,
++    0x00080058, 0x00000034, 0x0000006c, 0x00000069, 0x0000006a, 0x0000000a, 0x00000022, 0x0000006b,
++    0x0008004f, 0x00000007, 0x0000006e, 0x0000006c, 0x0000006c, 0x00000000, 0x00000001, 0x00000002,
++    0x0003003e, 0x0000006d, 0x0000006e, 0x00050039, 0x00000006, 0x0000006f, 0x0000000b, 0x0000006d,
++    0x0003003e, 0x00000068, 0x0000006f, 0x0004003d, 0x0000002f, 0x00000071, 0x00000031, 0x0004003d,
++    0x0000000d, 0x00000072, 0x00000044, 0x00080058, 0x00000034, 0x00000074, 0x00000071, 0x00000072,
++    0x0000000a, 0x00000022, 0x00000073, 0x0008004f, 0x00000007, 0x00000076, 0x00000074, 0x00000074,
++    0x00000000, 0x00000001, 0x00000002, 0x0003003e, 0x00000075, 0x00000076, 0x00050039, 0x00000006,
++    0x00000077, 0x0000000b, 0x00000075, 0x0003003e, 0x00000070, 0x00000077, 0x0004003d, 0x00000006,
++    0x00000079, 0x00000056, 0x0004003d, 0x00000006, 0x0000007a, 0x00000068, 0x0007000c, 0x00000006,
++    0x0000007b, 0x00000001, 0x00000028, 0x00000079, 0x0000007a, 0x0004003d, 0x00000006, 0x0000007c,
++    0x00000070, 0x0004003d, 0x00000006, 0x0000007d, 0x0000005f, 0x0007000c, 0x00000006, 0x0000007e,
++    0x00000001, 0x00000028, 0x0000007c, 0x0000007d, 0x0007000c, 0x00000006, 0x0000007f, 0x00000001,
++    0x00000028, 0x0000007b, 0x0000007e, 0x0004003d, 0x00000006, 0x00000080, 0x00000051, 0x0007000c,
++    0x00000006, 0x00000081, 0x00000001, 0x00000028, 0x0000007f, 0x00000080, 0x0003003e, 0x00000078,
++    0x00000081, 0x0004003d, 0x00000006, 0x00000083, 0x00000078, 0x0004003d, 0x00000006, 0x00000084,
++    0x00000056, 0x0004003d, 0x00000006, 0x00000085, 0x00000068, 0x0007000c, 0x00000006, 0x00000086,
++    0x00000001, 0x00000025, 0x00000084, 0x00000085, 0x0004003d, 0x00000006, 0x00000087, 0x00000070,
++    0x0004003d, 0x00000006, 0x00000088, 0x0000005f, 0x0007000c, 0x00000006, 0x00000089, 0x00000001,
++    0x00000025, 0x00000087, 0x00000088, 0x0007000c, 0x00000006, 0x0000008a, 0x00000001, 0x00000025,
++    0x00000086, 0x00000089, 0x0004003d, 0x00000006, 0x0000008b, 0x00000051, 0x0007000c, 0x00000006,
++    0x0000008c, 0x00000001, 0x00000025, 0x0000008a, 0x0000008b, 0x00050083, 0x00000006, 0x0000008d,
++    0x00000083, 0x0000008c, 0x0003003e, 0x00000082, 0x0000008d, 0x0004003d, 0x00000006, 0x0000008e,
++    0x00000082, 0x0004003d, 0x00000006, 0x00000090, 0x00000078, 0x00050085, 0x00000006, 0x00000092,
++    0x00000090, 0x00000091, 0x0007000c, 0x00000006, 0x00000093, 0x00000001, 0x00000028, 0x0000008f,
++    0x00000092, 0x000500b8, 0x0000001d, 0x00000094, 0x0000008e, 0x00000093, 0x000300f7, 0x00000096,
++    0x00000000, 0x000400fa, 0x00000094, 0x00000095, 0x00000096, 0x000200f8, 0x00000095, 0x0004003d,
++    0x00000034, 0x00000099, 0x0000004c, 0x0003003e, 0x00000098, 0x00000099, 0x000100fd, 0x000200f8,
++    0x00000096, 0x0004003d, 0x0000002f, 0x0000009c, 0x00000031, 0x0004003d, 0x0000000d, 0x0000009d,
++    0x00000044, 0x00080058, 0x00000034, 0x0000009f, 0x0000009c, 0x0000009d, 0x0000000a, 0x00000022,
++    0x0000009e, 0x0008004f, 0x00000007, 0x000000a1, 0x0000009f, 0x0000009f, 0x00000000, 0x00000001,
++    0x00000002, 0x0003003e, 0x000000a0, 0x000000a1, 0x00050039, 0x00000006, 0x000000a2, 0x0000000b,
++    0x000000a0, 0x0003003e, 0x0000009b, 0x000000a2, 0x0004003d, 0x0000002f, 0x000000a4, 0x00000031,
++    0x0004003d, 0x0000000d, 0x000000a5, 0x00000044, 0x00080058, 0x00000034, 0x000000a7, 0x000000a4,
++    0x000000a5, 0x0000000a, 0x00000022, 0x000000a6, 0x0008004f, 0x00000007, 0x000000a9, 0x000000a7,
++    0x000000a7, 0x00000000, 0x00000001, 0x00000002, 0x0003003e, 0x000000a8, 0x000000a9, 0x00050039,
++    0x00000006, 0x000000aa, 0x0000000b, 0x000000a8, 0x0003003e, 0x000000a3, 0x000000aa, 0x0004003d,
++    0x0000002f, 0x000000ac, 0x00000031, 0x0004003d, 0x0000000d, 0x000000ad, 0x00000044, 0x00080058,
++    0x00000034, 0x000000af, 0x000000ac, 0x000000ad, 0x0000000a, 0x00000022, 0x000000ae, 0x0008004f,
++    0x00000007, 0x000000b1, 0x000000af, 0x000000af, 0x00000000, 0x00000001, 0x00000002, 0x0003003e,
++    0x000000b0, 0x000000b1, 0x00050039, 0x00000006, 0x000000b2, 0x0000000b, 0x000000b0, 0x0003003e,
++    0x000000ab, 0x000000b2, 0x0004003d, 0x0000002f, 0x000000b4, 0x00000031, 0x0004003d, 0x0000000d,
++    0x000000b5, 0x00000044, 0x00080058, 0x00000034, 0x000000b7, 0x000000b4, 0x000000b5, 0x0000000a,
++    0x00000022, 0x000000b6, 0x0008004f, 0x00000007, 0x000000b9, 0x000000b7, 0x000000b7, 0x00000000,
++    0x00000001, 0x00000002, 0x0003003e, 0x000000b8, 0x000000b9, 0x00050039, 0x00000006, 0x000000ba,
++    0x0000000b, 0x000000b8, 0x0003003e, 0x000000b3, 0x000000ba, 0x0004003d, 0x00000006, 0x000000bc,
++    0x00000056, 0x0004003d, 0x00000006, 0x000000bd, 0x0000005f, 0x00050081, 0x00000006, 0x000000be,
++    0x000000bc, 0x000000bd, 0x0003003e, 0x000000bb, 0x000000be, 0x0004003d, 0x00000006, 0x000000c0,
++    0x00000068, 0x0004003d, 0x00000006, 0x000000c1, 0x00000070, 0x00050081, 0x00000006, 0x000000c2,
++    0x000000c0, 0x000000c1, 0x0003003e, 0x000000bf, 0x000000c2, 0x0004003d, 0x00000006, 0x000000c4,
++    0x0000009b, 0x0004003d, 0x00000006, 0x000000c5, 0x000000ab, 0x00050081, 0x00000006, 0x000000c6,
++    0x000000c4, 0x000000c5, 0x0004003d, 0x00000006, 0x000000c8, 0x00000068, 0x00050085, 0x00000006,
++    0x000000c9, 0x000000c7, 0x000000c8, 0x00050083, 0x00000006, 0x000000ca, 0x000000c6, 0x000000c9,
++    0x0006000c, 0x00000006, 0x000000cb, 0x00000001, 0x00000004, 0x000000ca, 0x0004003d, 0x00000006,
++    0x000000cc, 0x000000bb, 0x0004003d, 0x00000006, 0x000000cd, 0x00000051, 0x00050085, 0x00000006,
++    0x000000ce, 0x000000c7, 0x000000cd, 0x00050083, 0x00000006, 0x000000cf, 0x000000cc, 0x000000ce,
++    0x0006000c, 0x00000006, 0x000000d0, 0x00000001, 0x00000004, 0x000000cf, 0x00050085, 0x00000006,
++    0x000000d1, 0x000000c7, 0x000000d0, 0x00050081, 0x00000006, 0x000000d2, 0x000000cb, 0x000000d1,
++    0x0004003d, 0x00000006, 0x000000d3, 0x000000a3, 0x0004003d, 0x00000006, 0x000000d4, 0x000000b3,
++    0x00050081, 0x00000006, 0x000000d5, 0x000000d3, 0x000000d4, 0x0004003d, 0x00000006, 0x000000d6,
++    0x00000070, 0x00050085, 0x00000006, 0x000000d7, 0x000000c7, 0x000000d6, 0x00050083, 0x00000006,
++    0x000000d8, 0x000000d5, 0x000000d7, 0x0006000c, 0x00000006, 0x000000d9, 0x00000001, 0x00000004,
++    0x000000d8, 0x00050081, 0x00000006, 0x000000da, 0x000000d2, 0x000000d9, 0x0003003e, 0x000000c3,
++    0x000000da, 0x0004003d, 0x00000006, 0x000000dc, 0x000000ab, 0x0004003d, 0x00000006, 0x000000dd,
++    0x000000b3, 0x00050081, 0x00000006, 0x000000de, 0x000000dc, 0x000000dd, 0x0004003d, 0x00000006,
++    0x000000df, 0x0000005f, 0x00050085, 0x00000006, 0x000000e0, 0x000000c7, 0x000000df, 0x00050083,
++    0x00000006, 0x000000e1, 0x000000de, 0x000000e0, 0x0006000c, 0x00000006, 0x000000e2, 0x00000001,
++    0x00000004, 0x000000e1, 0x0004003d, 0x00000006, 0x000000e3, 0x000000bf, 0x0004003d, 0x00000006,
++    0x000000e4, 0x00000051, 0x00050085, 0x00000006, 0x000000e5, 0x000000c7, 0x000000e4, 0x00050083,
++    0x00000006, 0x000000e6, 0x000000e3, 0x000000e5, 0x0006000c, 0x00000006, 0x000000e7, 0x00000001,
++    0x00000004, 0x000000e6, 0x00050085, 0x00000006, 0x000000e8, 0x000000c7, 0x000000e7, 0x00050081,
++    0x00000006, 0x000000e9, 0x000000e2, 0x000000e8, 0x0004003d, 0x00000006, 0x000000ea, 0x0000009b,
++    0x0004003d, 0x00000006, 0x000000eb, 0x000000a3, 0x00050081, 0x00000006, 0x000000ec, 0x000000ea,
++    0x000000eb, 0x0004003d, 0x00000006, 0x000000ed, 0x00000056, 0x00050085, 0x00000006, 0x000000ee,
++    0x000000c7, 0x000000ed, 0x00050083, 0x00000006, 0x000000ef, 0x000000ec, 0x000000ee, 0x0006000c,
++    0x00000006, 0x000000f0, 0x00000001, 0x00000004, 0x000000ef, 0x00050081, 0x00000006, 0x000000f1,
++    0x000000e9, 0x000000f0, 0x0003003e, 0x000000db, 0x000000f1, 0x0004003d, 0x00000006, 0x000000f4,
++    0x000000c3, 0x0004003d, 0x00000006, 0x000000f5, 0x000000db, 0x000500be, 0x0000001d, 0x000000f6,
++    0x000000f4, 0x000000f5, 0x0003003e, 0x000000f3, 0x000000f6, 0x0004003d, 0x0000001d, 0x000000f8,
++    0x000000f3, 0x000300f7, 0x000000fb, 0x00000000, 0x000400fa, 0x000000f8, 0x000000fa, 0x000000ff,
++    0x000200f8, 0x000000fa, 0x00050041, 0x00000050, 0x000000fd, 0x0000003b, 0x000000fc, 0x0004003d,
++    0x00000006, 0x000000fe, 0x000000fd, 0x0003003e, 0x000000f9, 0x000000fe, 0x000200f9, 0x000000fb,
++    0x000200f8, 0x000000ff, 0x00050041, 0x00000050, 0x00000100, 0x0000003b, 0x0000001c, 0x0004003d,
++    0x00000006, 0x00000101, 0x00000100, 0x0003003e, 0x000000f9, 0x00000101, 0x000200f9, 0x000000fb,
++    0x000200f8, 0x000000fb, 0x0004003d, 0x00000006, 0x00000102, 0x000000f9, 0x0003003e, 0x000000f7,
++    0x00000102, 0x0004003d, 0x0000001d, 0x00000103, 0x000000f3, 0x000400a8, 0x0000001d, 0x00000104,
++    0x00000103, 0x000300f7, 0x00000106, 0x00000000, 0x000400fa, 0x00000104, 0x00000105, 0x00000106,
++    0x000200f8, 0x00000105, 0x0004003d, 0x00000006, 0x00000107, 0x00000068, 0x0003003e, 0x00000056,
++    0x00000107, 0x0004003d, 0x00000006, 0x00000108, 0x00000070, 0x0003003e, 0x0000005f, 0x00000108,
++    0x000200f9, 0x00000106, 0x000200f8, 0x00000106, 0x0004003d, 0x00000006, 0x0000010a, 0x00000056,
++    0x0004003d, 0x00000006, 0x0000010b, 0x00000051, 0x00050083, 0x00000006, 0x0000010c, 0x0000010a,
++    0x0000010b, 0x0003003e, 0x00000109, 0x0000010c, 0x0004003d, 0x00000006, 0x0000010e, 0x0000005f,
++    0x0004003d, 0x00000006, 0x0000010f, 0x00000051, 0x00050083, 0x00000006, 0x00000110, 0x0000010e,
++    0x0000010f, 0x0003003e, 0x0000010d, 0x00000110, 0x0004003d, 0x00000006, 0x00000112, 0x00000109,
++    0x0006000c, 0x00000006, 0x00000113, 0x00000001, 0x00000004, 0x00000112, 0x0004003d, 0x00000006,
++    0x00000114, 0x0000010d, 0x0006000c, 0x00000006, 0x00000115, 0x00000001, 0x00000004, 0x00000114,
++    0x000500be, 0x0000001d, 0x00000116, 0x00000113, 0x00000115, 0x0003003e, 0x00000111, 0x00000116,
++    0x0004003d, 0x00000006, 0x00000118, 0x00000109, 0x0006000c, 0x00000006, 0x00000119, 0x00000001,
++    0x00000004, 0x00000118, 0x0004003d, 0x00000006, 0x0000011a, 0x0000010d, 0x0006000c, 0x00000006,
++    0x0000011b, 0x00000001, 0x00000004, 0x0000011a, 0x0007000c, 0x00000006, 0x0000011c, 0x00000001,
++    0x00000028, 0x00000119, 0x0000011b, 0x00050085, 0x00000006, 0x0000011e, 0x0000011c, 0x0000011d,
++    0x0003003e, 0x00000117, 0x0000011e, 0x0004003d, 0x0000001d, 0x0000011f, 0x00000111, 0x000300f7,
++    0x00000121, 0x00000000, 0x000400fa, 0x0000011f, 0x00000120, 0x00000121, 0x000200f8, 0x00000120,
++    0x0004003d, 0x00000006, 0x00000122, 0x000000f7, 0x0004007f, 0x00000006, 0x00000123, 0x00000122,
++    0x0003003e, 0x000000f7, 0x00000123, 0x000200f9, 0x00000121, 0x000200f8, 0x00000121, 0x0004003d,
++    0x0000001d, 0x00000125, 0x00000111, 0x0004003d, 0x00000006, 0x00000126, 0x00000056, 0x0004003d,
++    0x00000006, 0x00000127, 0x0000005f, 0x000600a9, 0x00000006, 0x00000128, 0x00000125, 0x00000126,
++    0x00000127, 0x0004003d, 0x00000006, 0x00000129, 0x00000051, 0x00050081, 0x00000006, 0x0000012a,
++    0x00000128, 0x00000129, 0x00050085, 0x00000006, 0x0000012c, 0x0000012a, 0x0000012b, 0x0003003e,
++    0x00000124, 0x0000012c, 0x0004003d, 0x0000000d, 0x0000012e, 0x00000044, 0x0004003d, 0x0000001d,
++    0x0000012f, 0x000000f3, 0x000300f7, 0x00000132, 0x00000000, 0x000400fa, 0x0000012f, 0x00000131,
++    0x00000135, 0x000200f8, 0x00000131, 0x0004003d, 0x00000006, 0x00000133, 0x000000f7, 0x00050050,
++    0x0000000d, 0x00000134, 0x00000022, 0x00000133, 0x0003003e, 0x00000130, 0x00000134, 0x000200f9,
++    0x00000132, 0x000200f8, 0x00000135, 0x0004003d, 0x00000006, 0x00000136, 0x000000f7, 0x00050050,
++    0x0000000d, 0x00000137, 0x00000136, 0x00000022, 0x0003003e, 0x00000130, 0x00000137, 0x000200f9,
++    0x00000132, 0x000200f8, 0x00000132, 0x0004003d, 0x0000000d, 0x00000138, 0x00000130, 0x0005008e,
++    0x0000000d, 0x00000139, 0x00000138, 0x0000012b, 0x00050081, 0x0000000d, 0x0000013a, 0x0000012e,
++    0x00000139, 0x0003003e, 0x0000012d, 0x0000013a, 0x0004003d, 0x0000001d, 0x0000013c, 0x000000f3,
++    0x000300f7, 0x0000013f, 0x00000000, 0x000400fa, 0x0000013c, 0x0000013e, 0x00000143, 0x000200f8,
++    0x0000013e, 0x00050041, 0x00000050, 0x00000140, 0x0000003b, 0x0000001c, 0x0004003d, 0x00000006,
++    0x00000141, 0x00000140, 0x00050050, 0x0000000d, 0x00000142, 0x00000141, 0x00000022, 0x0003003e,
++    0x0000013d, 0x00000142, 0x000200f9, 0x0000013f, 0x000200f8, 0x00000143, 0x00050041, 0x00000050,
++    0x00000144, 0x0000003b, 0x000000fc, 0x0004003d, 0x00000006, 0x00000145, 0x00000144, 0x00050050,
++    0x0000000d, 0x00000146, 0x00000022, 0x00000145, 0x0003003e, 0x0000013d, 0x00000146, 0x000200f9,
++    0x0000013f, 0x000200f8, 0x0000013f, 0x0004003d, 0x0000000d, 0x00000147, 0x0000013d, 0x0003003e,
++    0x0000013b, 0x00000147, 0x0004003d, 0x0000000d, 0x00000149, 0x0000012d, 0x0004003d, 0x0000000d,
++    0x0000014a, 0x0000013b, 0x0005008e, 0x0000000d, 0x0000014b, 0x0000014a, 0x0000003c, 0x00050083,
++    0x0000000d, 0x0000014c, 0x00000149, 0x0000014b, 0x0003003e, 0x00000148, 0x0000014c, 0x0004003d,
++    0x0000000d, 0x0000014e, 0x0000012d, 0x0004003d, 0x0000000d, 0x0000014f, 0x0000013b, 0x0005008e,
++    0x0000000d, 0x00000150, 0x0000014f, 0x0000003c, 0x00050081, 0x0000000d, 0x00000151, 0x0000014e,
++    0x00000150, 0x0003003e, 0x0000014d, 0x00000151, 0x0004003d, 0x0000000d, 0x00000154, 0x00000148,
++    0x0003003e, 0x00000153, 0x00000154, 0x00050039, 0x00000006, 0x00000155, 0x00000011, 0x00000153,
++    0x0004003d, 0x00000006, 0x00000156, 0x00000124, 0x00050083, 0x00000006, 0x00000157, 0x00000155,
++    0x00000156, 0x0003003e, 0x00000152, 0x00000157, 0x0004003d, 0x0000000d, 0x0000015a, 0x0000014d,
++    0x0003003e, 0x00000159, 0x0000015a, 0x00050039, 0x00000006, 0x0000015b, 0x00000011, 0x00000159,
++    0x0004003d, 0x00000006, 0x0000015c, 0x00000124, 0x00050083, 0x00000006, 0x0000015d, 0x0000015b,
++    0x0000015c, 0x0003003e, 0x00000158, 0x0000015d, 0x0004003d, 0x00000006, 0x0000015f, 0x00000152,
++    0x0006000c, 0x00000006, 0x00000160, 0x00000001, 0x00000004, 0x0000015f, 0x0004003d, 0x00000006,
++    0x00000161, 0x00000117, 0x000500be, 0x0000001d, 0x00000162, 0x00000160, 0x00000161, 0x0003003e,
++    0x0000015e, 0x00000162, 0x0004003d, 0x00000006, 0x00000164, 0x00000158, 0x0006000c, 0x00000006,
++    0x00000165, 0x00000001, 0x00000004, 0x00000164, 0x0004003d, 0x00000006, 0x00000166, 0x00000117,
++    0x000500be, 0x0000001d, 0x00000167, 0x00000165, 0x00000166, 0x0003003e, 0x00000163, 0x00000167,
++    0x0003003e, 0x00000169, 0x00000062, 0x000200f9, 0x0000016a, 0x000200f8, 0x0000016a, 0x000400f6,
++    0x0000016c, 0x0000016d, 0x00000000, 0x000200f9, 0x0000016e, 0x000200f8, 0x0000016e, 0x0004003d,
++    0x00000017, 0x0000016f, 0x00000169, 0x000500b1, 0x0000001d, 0x00000171, 0x0000016f, 0x00000170,
++    0x000300f7, 0x00000173, 0x00000000, 0x000400fa, 0x00000171, 0x00000172, 0x00000173, 0x000200f8,
++    0x00000172, 0x0004003d, 0x0000001d, 0x00000174, 0x0000015e, 0x0004003d, 0x0000001d, 0x00000175,
++    0x00000163, 0x000500a7, 0x0000001d, 0x00000176, 0x00000174, 0x00000175, 0x000400a8, 0x0000001d,
++    0x00000177, 0x00000176, 0x000200f9, 0x00000173, 0x000200f8, 0x00000173, 0x000700f5, 0x0000001d,
++    0x00000178, 0x00000171, 0x0000016e, 0x00000177, 0x00000172, 0x000400fa, 0x00000178, 0x0000016b,
++    0x0000016c, 0x000200f8, 0x0000016b, 0x0004003d, 0x0000001d, 0x00000179, 0x0000015e, 0x000400a8,
++    0x0000001d, 0x0000017a, 0x00000179, 0x000300f7, 0x0000017c, 0x00000000, 0x000400fa, 0x0000017a,
++    0x0000017b, 0x0000017c, 0x000200f8, 0x0000017b, 0x0004003d, 0x0000000d, 0x0000017d, 0x0000013b,
++    0x0004003d, 0x00000017, 0x00000184, 0x00000169, 0x0003003e, 0x00000186, 0x00000183, 0x00050041,
++    0x00000050, 0x00000187, 0x00000186, 0x00000184, 0x0004003d, 0x00000006, 0x00000188, 0x00000187,
++    0x0005008e, 0x0000000d, 0x00000189, 0x0000017d, 0x00000188, 0x0004003d, 0x0000000d, 0x0000018a,
++    0x00000148, 0x00050083, 0x0000000d, 0x0000018b, 0x0000018a, 0x00000189, 0x0003003e, 0x00000148,
++    0x0000018b, 0x000200f9, 0x0000017c, 0x000200f8, 0x0000017c, 0x0004003d, 0x0000001d, 0x0000018c,
++    0x00000163, 0x000400a8, 0x0000001d, 0x0000018d, 0x0000018c, 0x000300f7, 0x0000018f, 0x00000000,
++    0x000400fa, 0x0000018d, 0x0000018e, 0x0000018f, 0x000200f8, 0x0000018e, 0x0004003d, 0x0000000d,
++    0x00000190, 0x0000013b, 0x0004003d, 0x00000017, 0x00000191, 0x00000169, 0x0003003e, 0x00000192,
++    0x00000183, 0x00050041, 0x00000050, 0x00000193, 0x00000192, 0x00000191, 0x0004003d, 0x00000006,
++    0x00000194, 0x00000193, 0x0005008e, 0x0000000d, 0x00000195, 0x00000190, 0x00000194, 0x0004003d,
++    0x0000000d, 0x00000196, 0x0000014d, 0x00050081, 0x0000000d, 0x00000197, 0x00000196, 0x00000195,
++    0x0003003e, 0x0000014d, 0x00000197, 0x000200f9, 0x0000018f, 0x000200f8, 0x0000018f, 0x0004003d,
++    0x00000017, 0x00000198, 0x00000169, 0x000500aa, 0x0000001d, 0x0000019a, 0x00000198, 0x00000199,
++    0x000300f7, 0x0000019c, 0x00000000, 0x000400fa, 0x0000019a, 0x0000019b, 0x0000019c, 0x000200f8,
++    0x0000019b, 0x000200f9, 0x0000016c, 0x000200f8, 0x0000019c, 0x0004003d, 0x0000001d, 0x0000019e,
++    0x0000015e, 0x000400a8, 0x0000001d, 0x0000019f, 0x0000019e, 0x000300f7, 0x000001a1, 0x00000000,
++    0x000400fa, 0x0000019f, 0x000001a0, 0x000001a1, 0x000200f8, 0x000001a0, 0x0004003d, 0x0000000d,
++    0x000001a3, 0x00000148, 0x0003003e, 0x000001a2, 0x000001a3, 0x00050039, 0x00000006, 0x000001a4,
++    0x00000011, 0x000001a2, 0x0004003d, 0x00000006, 0x000001a5, 0x00000124, 0x00050083, 0x00000006,
++    0x000001a6, 0x000001a4, 0x000001a5, 0x0003003e, 0x00000152, 0x000001a6, 0x0004003d, 0x00000006,
++    0x000001a7, 0x00000152, 0x0006000c, 0x00000006, 0x000001a8, 0x00000001, 0x00000004, 0x000001a7,
++    0x0004003d, 0x00000006, 0x000001a9, 0x00000117, 0x000500be, 0x0000001d, 0x000001aa, 0x000001a8,
++    0x000001a9, 0x0003003e, 0x0000015e, 0x000001aa, 0x000200f9, 0x000001a1, 0x000200f8, 0x000001a1,
++    0x0004003d, 0x0000001d, 0x000001ab, 0x00000163, 0x000400a8, 0x0000001d, 0x000001ac, 0x000001ab,
++    0x000300f7, 0x000001ae, 0x00000000, 0x000400fa, 0x000001ac, 0x000001ad, 0x000001ae, 0x000200f8,
++    0x000001ad, 0x0004003d, 0x0000000d, 0x000001b0, 0x0000014d, 0x0003003e, 0x000001af, 0x000001b0,
++    0x00050039, 0x00000006, 0x000001b1, 0x00000011, 0x000001af, 0x0004003d, 0x00000006, 0x000001b2,
++    0x00000124, 0x00050083, 0x00000006, 0x000001b3, 0x000001b1, 0x000001b2, 0x0003003e, 0x00000158,
++    0x000001b3, 0x0004003d, 0x00000006, 0x000001b4, 0x00000158, 0x0006000c, 0x00000006, 0x000001b5,
++    0x00000001, 0x00000004, 0x000001b4, 0x0004003d, 0x00000006, 0x000001b6, 0x00000117, 0x000500be,
++    0x0000001d, 0x000001b7, 0x000001b5, 0x000001b6, 0x0003003e, 0x00000163, 0x000001b7, 0x000200f9,
++    0x000001ae, 0x000200f8, 0x000001ae, 0x000200f9, 0x0000016d, 0x000200f8, 0x0000016d, 0x0004003d,
++    0x00000017, 0x000001b8, 0x00000169, 0x00050080, 0x00000017, 0x000001b9, 0x000001b8, 0x00000062,
++    0x0003003e, 0x00000169, 0x000001b9, 0x000200f9, 0x0000016a, 0x000200f8, 0x0000016c, 0x0004003d,
++    0x0000001d, 0x000001bb, 0x000000f3, 0x000300f7, 0x000001be, 0x00000000, 0x000400fa, 0x000001bb,
++    0x000001bd, 0x000001c4, 0x000200f8, 0x000001bd, 0x00050041, 0x00000050, 0x000001bf, 0x00000044,
++    0x0000001c, 0x0004003d, 0x00000006, 0x000001c0, 0x000001bf, 0x00050041, 0x00000050, 0x000001c1,
++    0x00000148, 0x0000001c, 0x0004003d, 0x00000006, 0x000001c2, 0x000001c1, 0x00050083, 0x00000006,
++    0x000001c3, 0x000001c0, 0x000001c2, 0x0003003e, 0x000001bc, 0x000001c3, 0x000200f9, 0x000001be,
++    0x000200f8, 0x000001c4, 0x00050041, 0x00000050, 0x000001c5, 0x00000044, 0x000000fc, 0x0004003d,
++    0x00000006, 0x000001c6, 0x000001c5, 0x00050041, 0x00000050, 0x000001c7, 0x00000148, 0x000000fc,
++    0x0004003d, 0x00000006, 0x000001c8, 0x000001c7, 0x00050083, 0x00000006, 0x000001c9, 0x000001c6,
++    0x000001c8, 0x0003003e, 0x000001bc, 0x000001c9, 0x000200f9, 0x000001be, 0x000200f8, 0x000001be,
++    0x0004003d, 0x00000006, 0x000001ca, 0x000001bc, 0x0003003e, 0x000001ba, 0x000001ca, 0x0004003d,
++    0x0000001d, 0x000001cc, 0x000000f3, 0x000300f7, 0x000001cf, 0x00000000, 0x000400fa, 0x000001cc,
++    0x000001ce, 0x000001d5, 0x000200f8, 0x000001ce, 0x00050041, 0x00000050, 0x000001d0, 0x0000014d,
++    0x0000001c, 0x0004003d, 0x00000006, 0x000001d1, 0x000001d0, 0x00050041, 0x00000050, 0x000001d2,
++    0x00000044, 0x0000001c, 0x0004003d, 0x00000006, 0x000001d3, 0x000001d2, 0x00050083, 0x00000006,
++    0x000001d4, 0x000001d1, 0x000001d3, 0x0003003e, 0x000001cd, 0x000001d4, 0x000200f9, 0x000001cf,
++    0x000200f8, 0x000001d5, 0x00050041, 0x00000050, 0x000001d6, 0x0000014d, 0x000000fc, 0x0004003d,
++    0x00000006, 0x000001d7, 0x000001d6, 0x00050041, 0x00000050, 0x000001d8, 0x00000044, 0x000000fc,
++    0x0004003d, 0x00000006, 0x000001d9, 0x000001d8, 0x00050083, 0x00000006, 0x000001da, 0x000001d7,
++    0x000001d9, 0x0003003e, 0x000001cd, 0x000001da, 0x000200f9, 0x000001cf, 0x000200f8, 0x000001cf,
++    0x0004003d, 0x00000006, 0x000001db, 0x000001cd, 0x0003003e, 0x000001cb, 0x000001db, 0x0004003d,
++    0x00000006, 0x000001dd, 0x000001ba, 0x0004003d, 0x00000006, 0x000001de, 0x000001cb, 0x000500b8,
++    0x0000001d, 0x000001df, 0x000001dd, 0x000001de, 0x0004003d, 0x00000006, 0x000001e0, 0x00000152,
++    0x0004003d, 0x00000006, 0x000001e1, 0x00000158, 0x000600a9, 0x00000006, 0x000001e2, 0x000001df,
++    0x000001e0, 0x000001e1, 0x000500b8, 0x0000001d, 0x000001e3, 0x000001e2, 0x00000022, 0x0004003d,
++    0x00000006, 0x000001e4, 0x00000051, 0x0004003d, 0x00000006, 0x000001e5, 0x00000124, 0x000500b8,
++    0x0000001d, 0x000001e6, 0x000001e4, 0x000001e5, 0x000500a5, 0x0000001d, 0x000001e7, 0x000001e3,
++    0x000001e6, 0x0003003e, 0x000001dc, 0x000001e7, 0x0004003d, 0x0000001d, 0x000001e9, 0x000001dc,
++    0x000300f7, 0x000001ec, 0x00000000, 0x000400fa, 0x000001e9, 0x000001eb, 0x000001f5, 0x000200f8,
++    0x000001eb, 0x0004003d, 0x00000006, 0x000001ed, 0x000001ba, 0x0004003d, 0x00000006, 0x000001ee,
++    0x000001cb, 0x0007000c, 0x00000006, 0x000001ef, 0x00000001, 0x00000025, 0x000001ed, 0x000001ee,
++    0x0004003d, 0x00000006, 0x000001f0, 0x000001ba, 0x0004003d, 0x00000006, 0x000001f1, 0x000001cb,
++    0x00050081, 0x00000006, 0x000001f2, 0x000001f0, 0x000001f1, 0x00050088, 0x00000006, 0x000001f3,
++    0x000001ef, 0x000001f2, 0x00050083, 0x00000006, 0x000001f4, 0x0000012b, 0x000001f3, 0x0003003e,
++    0x000001ea, 0x000001f4, 0x000200f9, 0x000001ec, 0x000200f8, 0x000001f5, 0x0003003e, 0x000001ea,
++    0x00000022, 0x000200f9, 0x000001ec, 0x000200f8, 0x000001ec, 0x0004003d, 0x00000006, 0x000001f6,
++    0x000001ea, 0x0004003d, 0x00000006, 0x000001f7, 0x000000f7, 0x00050085, 0x00000006, 0x000001f8,
++    0x000001f6, 0x000001f7, 0x0003003e, 0x000001e8, 0x000001f8, 0x0004003d, 0x0000002f, 0x000001f9,
++    0x00000031, 0x0004003d, 0x0000000d, 0x000001fa, 0x00000044, 0x0004003d, 0x0000001d, 0x000001fb,
++    0x000000f3, 0x000300f7, 0x000001fe, 0x00000000, 0x000400fa, 0x000001fb, 0x000001fd, 0x00000201,
++    0x000200f8, 0x000001fd, 0x0004003d, 0x00000006, 0x000001ff, 0x000001e8, 0x00050050, 0x0000000d,
++    0x00000200, 0x00000022, 0x000001ff, 0x0003003e, 0x000001fc, 0x00000200, 0x000200f9, 0x000001fe,
++    0x000200f8, 0x00000201, 0x0004003d, 0x00000006, 0x00000202, 0x000001e8, 0x00050050, 0x0000000d,
++    0x00000203, 0x00000202, 0x00000022, 0x0003003e, 0x000001fc, 0x00000203, 0x000200f9, 0x000001fe,
++    0x000200f8, 0x000001fe, 0x0004003d, 0x0000000d, 0x00000204, 0x000001fc, 0x00050081, 0x0000000d,
++    0x00000205, 0x000001fa, 0x00000204, 0x00070058, 0x00000034, 0x00000206, 0x000001f9, 0x00000205,
++    0x00000002, 0x00000022, 0x0008004f, 0x00000007, 0x00000207, 0x00000206, 0x00000206, 0x00000000,
++    0x00000001, 0x00000002, 0x00050041, 0x00000050, 0x00000209, 0x0000004c, 0x00000208, 0x0004003d,
++    0x00000006, 0x0000020a, 0x00000209, 0x00050051, 0x00000006, 0x0000020b, 0x00000207, 0x00000000,
++    0x00050051, 0x00000006, 0x0000020c, 0x00000207, 0x00000001, 0x00050051, 0x00000006, 0x0000020d,
++    0x00000207, 0x00000002, 0x00070050, 0x00000034, 0x0000020e, 0x0000020b, 0x0000020c, 0x0000020d,
++    0x0000020a, 0x0003003e, 0x00000098, 0x0000020e, 0x000100fd, 0x00010038, 0x00050036, 0x00000006,
++    0x0000000b, 0x00000000, 0x00000009, 0x00030037, 0x00000008, 0x0000000a, 0x000200f8, 0x0000000c,
++    0x00050041, 0x00000019, 0x0000001a, 0x00000016, 0x00000018, 0x0004003d, 0x00000013, 0x0000001b,
++    0x0000001a, 0x000500ab, 0x0000001d, 0x0000001e, 0x0000001b, 0x0000001c, 0x000300f7, 0x00000020,
++    0x00000000, 0x000400fa, 0x0000001e, 0x0000001f, 0x00000020, 0x000200f8, 0x0000001f, 0x0004003d,
++    0x00000007, 0x00000021, 0x0000000a, 0x0007000c, 0x00000007, 0x00000024, 0x00000001, 0x00000028,
++    0x00000021, 0x00000023, 0x0006000c, 0x00000007, 0x00000025, 0x00000001, 0x0000001f, 0x00000024,
++    0x0003003e, 0x0000000a, 0x00000025, 0x000200f9, 0x00000020, 0x000200f8, 0x00000020, 0x0004003d,
++    0x00000007, 0x00000026, 0x0000000a, 0x00050094, 0x00000006, 0x0000002b, 0x00000026, 0x0000002a,
++    0x000200fe, 0x0000002b, 0x00010038, 0x00050036, 0x00000006, 0x00000011, 0x00000000, 0x0000000f,
++    0x00030037, 0x0000000e, 0x00000010, 0x000200f8, 0x00000012, 0x0004003b, 0x00000008, 0x00000036,
++    0x00000007, 0x0004003d, 0x0000002f, 0x00000032, 0x00000031, 0x0004003d, 0x0000000d, 0x00000033,
++    0x00000010, 0x00070058, 0x00000034, 0x00000035, 0x00000032, 0x00000033, 0x00000002, 0x00000022,
++    0x0008004f, 0x00000007, 0x00000037, 0x00000035, 0x00000035, 0x00000000, 0x00000001, 0x00000002,
++    0x0003003e, 0x00000036, 0x00000037, 0x00050039, 0x00000006, 0x00000038, 0x0000000b, 0x00000036,
++    0x000200fe, 0x00000038, 0x00010038,
++};
++inline constexpr size_t kFxaaQualityFragSize = sizeof(kFxaaQualityFrag);
++
++// fxaa.frag (FXAA_STEPS=6)
++inline constexpr uint32_t kFxaaFastFrag[] = {
++    0x07230203, 0x00010300, 0x0008000b, 0x0000020f, 0x00000000, 0x00020011, 0x00000001, 0x00020011,
++    0x00000032, 0x0006000b, 0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e,
++    0x00000000, 0x00000001, 0x0007000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000046,
++    0x00000098, 0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x00040005,
++    0x00000004, 0x6e69616d, 0x00000000, 0x00050005, 0x0000000b, 0x414d554c, 0x33667628, 0x0000003b,
++    0x00030005, 0x0000000a, 0x00000063, 0x00050005, 0x00000011, 0x616d756c, 0x32667628, 0x0000003b,
++    0x00030005, 0x00000010, 0x00007675, 0x00040005, 0x00000014, 0x68737550, 0x00000000, 0x00060006,
++    0x00000014, 0x00000000, 0x63726570, 0x75747065, 0x00006c61, 0x00030005, 0x00000016, 0x00006370,
++    0x00030005, 0x00000031, 0x00000074, 0x00040005, 0x00000036, 0x61726170, 0x0000006d, 0x00030005,
++    0x0000003b, 0x00706372, 0x00030005, 0x00000044, 0x00736f70, 0x00060005, 0x00000046, 0x465f6c67,
++    0x43676172, 0x64726f6f, 0x00000000, 0x00040005, 0x0000004c, 0x61626772, 0x0000004d, 0x00040005,
++    0x00000051, 0x616d756c, 0x0000004d, 0x00040005, 0x00000052, 0x61726170, 0x0000006d, 0x00040005,
++    0x00000056, 0x616d756c, 0x0000004e, 0x00040005, 0x0000005c, 0x61726170, 0x0000006d, 0x00040005,
++    0x0000005f, 0x616d756c, 0x00000053, 0x00040005, 0x00000065, 0x61726170, 0x0000006d, 0x00040005,
++    0x00000068, 0x616d756c, 0x00000057, 0x00040005, 0x0000006d, 0x61726170, 0x0000006d, 0x00040005,
++    0x00000070, 0x616d756c, 0x00000045, 0x00040005, 0x00000075, 0x61726170, 0x0000006d, 0x00050005,
++    0x00000078, 0x676e6172, 0x78614d65, 0x00000000, 0x00040005, 0x00000082, 0x676e6172, 0x00000065,
++    0x00030005, 0x00000098, 0x0000006f, 0x00040005, 0x0000009b, 0x616d756c, 0x0000574e, 0x00040005,
++    0x000000a0, 0x61726170, 0x0000006d, 0x00040005, 0x000000a3, 0x616d756c, 0x0000454e, 0x00040005,
++    0x000000a8, 0x61726170, 0x0000006d, 0x00040005, 0x000000ab, 0x616d756c, 0x00005753, 0x00040005,
++    0x000000b0, 0x61726170, 0x0000006d, 0x00040005, 0x000000b3, 0x616d756c, 0x00004553, 0x00040005,
++    0x000000b8, 0x61726170, 0x0000006d, 0x00040005, 0x000000bb, 0x616d756c, 0x0000534e, 0x00040005,
++    0x000000bf, 0x616d756c, 0x00004557, 0x00050005, 0x000000c3, 0x65676465, 0x7a726f48, 0x00000000,
++    0x00050005, 0x000000db, 0x65676465, 0x74726556, 0x00000000, 0x00050005, 0x000000f3, 0x7a726f68,
++    0x6e617053, 0x00000000, 0x00050005, 0x000000f7, 0x676e656c, 0x69536874, 0x00006e67, 0x00050005,
++    0x00000109, 0x64617267, 0x746e6569, 0x0000004e, 0x00050005, 0x0000010d, 0x64617267, 0x746e6569,
++    0x00000053, 0x00040005, 0x00000111, 0x72696170, 0x0000004e, 0x00060005, 0x00000117, 0x64617267,
++    0x746e6569, 0x6c616353, 0x00006465, 0x00050005, 0x00000124, 0x616d756c, 0x666c6148, 0x00000000,
++    0x00040005, 0x0000012d, 0x42736f70, 0x00000000, 0x00030005, 0x0000013b, 0x0066666f, 0x00040005,
++    0x00000148, 0x4e736f70, 0x00000000, 0x00040005, 0x0000014d, 0x50736f70, 0x00000000, 0x00040005,
++    0x00000152, 0x4e646e65, 0x00000000, 0x00040005, 0x00000153, 0x61726170, 0x0000006d, 0x00040005,
++    0x00000158, 0x50646e65, 0x00000000, 0x00040005, 0x00000159, 0x61726170, 0x0000006d, 0x00040005,
++    0x0000015e, 0x656e6f64, 0x0000004e, 0x00040005, 0x00000163, 0x656e6f64, 0x00000050, 0x00030005,
++    0x00000169, 0x00000069, 0x00050005, 0x00000186, 0x65646e69, 0x6c626178, 0x00000065, 0x00050005,
++    0x00000192, 0x65646e69, 0x6c626178, 0x00000065, 0x00040005, 0x000001a2, 0x61726170, 0x0000006d,
++    0x00040005, 0x000001af, 0x61726170, 0x0000006d, 0x00040005, 0x000001ba, 0x4e747364, 0x00000000,
++    0x00040005, 0x000001cb, 0x50747364, 0x00000000, 0x00050005, 0x000001dc, 0x646f6f67, 0x6e617053,
++    0x00000000, 0x00040005, 0x000001e8, 0x7366666f, 0x00007465, 0x00030047, 0x00000014, 0x00000002,
++    0x00050048, 0x00000014, 0x00000000, 0x00000023, 0x00000000, 0x00040047, 0x00000031, 0x00000021,
++    0x00000000, 0x00040047, 0x00000031, 0x00000022, 0x00000000, 0x00040047, 0x00000046, 0x0000000b,
++    0x0000000f, 0x00040047, 0x00000098, 0x0000001e, 0x00000000, 0x00020013, 0x00000002, 0x00030021,
++    0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006,
++    0x00000003, 0x00040020, 0x00000008, 0x00000007, 0x00000007, 0x00040021, 0x00000009, 0x00000006,
++    0x00000008, 0x00040017, 0x0000000d, 0x00000006, 0x00000002, 0x00040020, 0x0000000e, 0x00000007,
++    0x0000000d, 0x00040021, 0x0000000f, 0x00000006, 0x0000000e, 0x00040015, 0x00000013, 0x00000020,
++    0x00000000, 0x0003001e, 0x00000014, 0x00000013, 0x00040020, 0x00000015, 0x00000009, 0x00000014,
++    0x0004003b, 0x00000015, 0x00000016, 0x00000009, 0x00040015, 0x00000017, 0x00000020, 0x00000001,
++    0x0004002b, 0x00000017, 0x00000018, 0x00000000, 0x00040020, 0x00000019, 0x00000009, 0x00000013,
++    0x0004002b, 0x00000013, 0x0000001c, 0x00000000, 0x00020014, 0x0000001d, 0x0004002b, 0x00000006,
++    0x00000022, 0x00000000, 0x0006002c, 0x00000007, 0x00000023, 0x00000022, 0x00000022, 0x00000022,
++    0x0004002b, 0x00000006, 0x00000027, 0x3e991687, 0x0004002b, 0x00000006, 0x00000028, 0x3f1645a2,
++    0x0004002b, 0x00000006, 0x00000029, 0x3de978d5, 0x0006002c, 0x00000007, 0x0000002a, 0x00000027,
++    0x00000028, 0x00000029, 0x00090019, 0x0000002e, 0x00000006, 0x00000001, 0x00000000, 0x00000000,
++    0x00000000, 0x00000001, 0x00000000, 0x0003001b, 0x0000002f, 0x0000002e, 0x00040020, 0x00000030,
++    0x00000000, 0x0000002f, 0x0004003b, 0x00000030, 0x00000031, 0x00000000, 0x00040017, 0x00000034,
++    0x00000006, 0x00000004, 0x0004002b, 0x00000006, 0x0000003c, 0x3f800000, 0x00040017, 0x0000003f,
++    0x00000017, 0x00000002, 0x00040020, 0x00000045, 0x00000001, 0x00000034, 0x0004003b, 0x00000045,
++    0x00000046, 0x00000001, 0x00040020, 0x0000004b, 0x00000007, 0x00000034, 0x00040020, 0x00000050,
++    0x00000007, 0x00000006, 0x0004002b, 0x00000017, 0x00000059, 0xffffffff, 0x0005002c, 0x0000003f,
++    0x0000005a, 0x00000018, 0x00000059, 0x0004002b, 0x00000017, 0x00000062, 0x00000001, 0x0005002c,
++    0x0000003f, 0x00000063, 0x00000018, 0x00000062, 0x0005002c, 0x0000003f, 0x0000006b, 0x00000059,
++    0x00000018, 0x0005002c, 0x0000003f, 0x00000073, 0x00000062, 0x00000018, 0x0004002b, 0x00000006,
++    0x0000008f, 0x3cff9724, 0x0004002b, 0x00000006, 0x00000091, 0x3d810625, 0x00040020, 0x00000097,
++    0x00000003, 0x00000034, 0x0004003b, 0x00000097, 0x00000098, 0x00000003, 0x0005002c, 0x0000003f,
++    0x0000009e, 0x00000059, 0x00000059, 0x0005002c, 0x0000003f, 0x000000a6, 0x00000062, 0x00000059,
++    0x0005002c, 0x0000003f, 0x000000ae, 0x00000059, 0x00000062, 0x0005002c, 0x0000003f, 0x000000b6,
++    0x00000062, 0x00000062, 0x0004002b, 0x00000006, 0x000000c7, 0x40000000, 0x00040020, 0x000000f2,
++    0x00000007, 0x0000001d, 0x0004002b, 0x00000013, 0x000000fc, 0x00000001, 0x0004002b, 0x00000006,
++    0x0000011d, 0x3e800000, 0x0004002b, 0x00000006, 0x0000012b, 0x3f000000, 0x00040020, 0x00000168,
++    0x00000007, 0x00000017, 0x0004002b, 0x00000017, 0x00000170, 0x00000006, 0x0004002b, 0x00000013,
++    0x0000017e, 0x00000006, 0x0004001c, 0x0000017f, 0x00000006, 0x0000017e, 0x0004002b, 0x00000006,
++    0x00000180, 0x3fc00000, 0x0004002b, 0x00000006, 0x00000181, 0x40800000, 0x0004002b, 0x00000006,
++    0x00000182, 0x41400000, 0x0009002c, 0x0000017f, 0x00000183, 0x0000003c, 0x00000180, 0x000000c7,
++    0x000000c7, 0x00000181, 0x00000182, 0x00040020, 0x00000185, 0x00000007, 0x0000017f, 0x0004002b,
++    0x00000017, 0x00000199, 0x00000005, 0x0004002b, 0x00000013, 0x00000208, 0x00000003, 0x00050036,
++    0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003b, 0x0000000e,
++    0x0000003b, 0x00000007, 0x0004003b, 0x0000000e, 0x00000044, 0x00000007, 0x0004003b, 0x0000004b,
++    0x0000004c, 0x00000007, 0x0004003b, 0x00000050, 0x00000051, 0x00000007, 0x0004003b, 0x00000008,
++    0x00000052, 0x00000007, 0x0004003b, 0x00000050, 0x00000056, 0x00000007, 0x0004003b, 0x00000008,
++    0x0000005c, 0x00000007, 0x0004003b, 0x00000050, 0x0000005f, 0x00000007, 0x0004003b, 0x00000008,
++    0x00000065, 0x00000007, 0x0004003b, 0x00000050, 0x00000068, 0x00000007, 0x0004003b, 0x00000008,
++    0x0000006d, 0x00000007, 0x0004003b, 0x00000050, 0x00000070, 0x00000007, 0x0004003b, 0x00000008,
++    0x00000075, 0x00000007, 0x0004003b, 0x00000050, 0x00000078, 0x00000007, 0x0004003b, 0x00000050,
++    0x00000082, 0x00000007, 0x0004003b, 0x00000050, 0x0000009b, 0x00000007, 0x0004003b, 0x00000008,
++    0x000000a0, 0x00000007, 0x0004003b, 0x00000050, 0x000000a3, 0x00000007, 0x0004003b, 0x00000008,
++    0x000000a8, 0x00000007, 0x0004003b, 0x00000050, 0x000000ab, 0x00000007, 0x0004003b, 0x00000008,
++    0x000000b0, 0x00000007, 0x0004003b, 0x00000050, 0x000000b3, 0x00000007, 0x0004003b, 0x00000008,
++    0x000000b8, 0x00000007, 0x0004003b, 0x00000050, 0x000000bb, 0x00000007, 0x0004003b, 0x00000050,
++    0x000000bf, 0x00000007, 0x0004003b, 0x00000050, 0x000000c3, 0x00000007, 0x0004003b, 0x00000050,
++    0x000000db, 0x00000007, 0x0004003b, 0x000000f2, 0x000000f3, 0x00000007, 0x0004003b, 0x00000050,
++    0x000000f7, 0x00000007, 0x0004003b, 0x00000050, 0x000000f9, 0x00000007, 0x0004003b, 0x00000050,
++    0x00000109, 0x00000007, 0x0004003b, 0x00000050, 0x0000010d, 0x00000007, 0x0004003b, 0x000000f2,
++    0x00000111, 0x00000007, 0x0004003b, 0x00000050, 0x00000117, 0x00000007, 0x0004003b, 0x00000050,
++    0x00000124, 0x00000007, 0x0004003b, 0x0000000e, 0x0000012d, 0x00000007, 0x0004003b, 0x0000000e,
++    0x00000130, 0x00000007, 0x0004003b, 0x0000000e, 0x0000013b, 0x00000007, 0x0004003b, 0x0000000e,
++    0x0000013d, 0x00000007, 0x0004003b, 0x0000000e, 0x00000148, 0x00000007, 0x0004003b, 0x0000000e,
++    0x0000014d, 0x00000007, 0x0004003b, 0x00000050, 0x00000152, 0x00000007, 0x0004003b, 0x0000000e,
++    0x00000153, 0x00000007, 0x0004003b, 0x00000050, 0x00000158, 0x00000007, 0x0004003b, 0x0000000e,
++    0x00000159, 0x00000007, 0x0004003b, 0x000000f2, 0x0000015e, 0x00000007, 0x0004003b, 0x000000f2,
++    0x00000163, 0x00000007, 0x0004003b, 0x00000168, 0x00000169, 0x00000007, 0x0004003b, 0x00000185,
++    0x00000186, 0x00000007, 0x0004003b, 0x00000185, 0x00000192, 0x00000007, 0x0004003b, 0x0000000e,
++    0x000001a2, 0x00000007, 0x0004003b, 0x0000000e, 0x000001af, 0x00000007, 0x0004003b, 0x00000050,
++    0x000001ba, 0x00000007, 0x0004003b, 0x00000050, 0x000001bc, 0x00000007, 0x0004003b, 0x00000050,
++    0x000001cb, 0x00000007, 0x0004003b, 0x00000050, 0x000001cd, 0x00000007, 0x0004003b, 0x000000f2,
++    0x000001dc, 0x00000007, 0x0004003b, 0x00000050, 0x000001e8, 0x00000007, 0x0004003b, 0x00000050,
++    0x000001ea, 0x00000007, 0x0004003b, 0x0000000e, 0x000001fc, 0x00000007, 0x0004003d, 0x0000002f,
++    0x0000003d, 0x00000031, 0x00040064, 0x0000002e, 0x0000003e, 0x0000003d, 0x00050067, 0x0000003f,
++    0x00000040, 0x0000003e, 0x00000018, 0x0004006f, 0x0000000d, 0x00000041, 0x00000040, 0x00050050,
++    0x0000000d, 0x00000042, 0x0000003c, 0x0000003c, 0x00050088, 0x0000000d, 0x00000043, 0x00000042,
++    0x00000041, 0x0003003e, 0x0000003b, 0x00000043, 0x0004003d, 0x00000034, 0x00000047, 0x00000046,
++    0x0007004f, 0x0000000d, 0x00000048, 0x00000047, 0x00000047, 0x00000000, 0x00000001, 0x0004003d,
++    0x0000000d, 0x00000049, 0x0000003b, 0x00050085, 0x0000000d, 0x0000004a, 0x00000048, 0x00000049,
++    0x0003003e, 0x00000044, 0x0000004a, 0x0004003d, 0x0000002f, 0x0000004d, 0x00000031, 0x0004003d,
++    0x0000000d, 0x0000004e, 0x00000044, 0x00070058, 0x00000034, 0x0000004f, 0x0000004d, 0x0000004e,
++    0x00000002, 0x00000022, 0x0003003e, 0x0000004c, 0x0000004f, 0x0004003d, 0x00000034, 0x00000053,
++    0x0000004c, 0x0008004f, 0x00000007, 0x00000054, 0x00000053, 0x00000053, 0x00000000, 0x00000001,
++    0x00000002, 0x0003003e, 0x00000052, 0x00000054, 0x00050039, 0x00000006, 0x00000055, 0x0000000b,
++    0x00000052, 0x0003003e, 0x00000051, 0x00000055, 0x0004003d, 0x0000002f, 0x00000057, 0x00000031,
++    0x0004003d, 0x0000000d, 0x00000058, 0x00000044, 0x00080058, 0x00000034, 0x0000005b, 0x00000057,
++    0x00000058, 0x0000000a, 0x00000022, 0x0000005a, 0x0008004f, 0x00000007, 0x0000005d, 0x0000005b,
++    0x0000005b, 0x00000000, 0x00000001, 0x00000002, 0x0003003e, 0x0000005c, 0x0000005d, 0x00050039,
++    0x00000006, 0x0000005e, 0x0000000b, 0x0000005c, 0x0003003e, 0x00000056, 0x0000005e, 0x0004003d,
++    0x0000002f, 0x00000060, 0x00000031, 0x0004003d, 0x0000000d, 0x00000061, 0x00000044, 0x00080058,
++    0x00000034, 0x00000064, 0x00000060, 0x00000061, 0x0000000a, 0x00000022, 0x00000063, 0x0008004f,
++    0x00000007, 0x00000066, 0x00000064, 0x00000064, 0x00000000, 0x00000001, 0x00000002, 0x0003003e,
++    0x00000065, 0x00000066, 0x00050039, 0x00000006, 0x00000067, 0x0000000b, 0x00000065, 0x0003003e,
++    0x0000005f, 0x00000067, 0x0004003d, 0x0000002f, 0x00000069, 0x00000031, 0x0004003d, 0x0000000d,
++    0x0000006a, 0x00000044, 0x00080058, 0x00000034, 0x0000006c, 0x00000069, 0x0000006a, 0x0000000a,
++    0x00000022, 0x0000006b, 0x0008004f, 0x00000007, 0x0000006e, 0x0000006c, 0x0000006c, 0x00000000,
++    0x00000001, 0x00000002, 0x0003003e, 0x0000006d, 0x0000006e, 0x00050039, 0x00000006, 0x0000006f,
++    0x0000000b, 0x0000006d, 0x0003003e, 0x00000068, 0x0000006f, 0x0004003d, 0x0000002f, 0x00000071,
++    0x00000031, 0x0004003d, 0x0000000d, 0x00000072, 0x00000044, 0x00080058, 0x00000034, 0x00000074,
++    0x00000071, 0x00000072, 0x0000000a, 0x00000022, 0x00000073, 0x0008004f, 0x00000007, 0x00000076,
++    0x00000074, 0x00000074, 0x00000000, 0x00000001, 0x00000002, 0x0003003e, 0x00000075, 0x00000076,
++    0x00050039, 0x00000006, 0x00000077, 0x0000000b, 0x00000075, 0x0003003e, 0x00000070, 0x00000077,
++    0x0004003d, 0x00000006, 0x00000079, 0x00000056, 0x0004003d, 0x00000006, 0x0000007a, 0x00000068,
++    0x0007000c, 0x00000006, 0x0000007b, 0x00000001, 0x00000028, 0x00000079, 0x0000007a, 0x0004003d,
++    0x00000006, 0x0000007c, 0x00000070, 0x0004003d, 0x00000006, 0x0000007d, 0x0000005f, 0x0007000c,
++    0x00000006, 0x0000007e, 0x00000001, 0x00000028, 0x0000007c, 0x0000007d, 0x0007000c, 0x00000006,
++    0x0000007f, 0x00000001, 0x00000028, 0x0000007b, 0x0000007e, 0x0004003d, 0x00000006, 0x00000080,
++    0x00000051, 0x0007000c, 0x00000006, 0x00000081, 0x00000001, 0x00000028, 0x0000007f, 0x00000080,
++    0x0003003e, 0x00000078, 0x00000081, 0x0004003d, 0x00000006, 0x00000083, 0x00000078, 0x0004003d,
++    0x00000006, 0x00000084, 0x00000056, 0x0004003d, 0x00000006, 0x00000085, 0x00000068, 0x0007000c,
++    0x00000006, 0x00000086, 0x00000001, 0x00000025, 0x00000084, 0x00000085, 0x0004003d, 0x00000006,
++    0x00000087, 0x00000070, 0x0004003d, 0x00000006, 0x00000088, 0x0000005f, 0x0007000c, 0x00000006,
++    0x00000089, 0x00000001, 0x00000025, 0x00000087, 0x00000088, 0x0007000c, 0x00000006, 0x0000008a,
++    0x00000001, 0x00000025, 0x00000086, 0x00000089, 0x0004003d, 0x00000006, 0x0000008b, 0x00000051,
++    0x0007000c, 0x00000006, 0x0000008c, 0x00000001, 0x00000025, 0x0000008a, 0x0000008b, 0x00050083,
++    0x00000006, 0x0000008d, 0x00000083, 0x0000008c, 0x0003003e, 0x00000082, 0x0000008d, 0x0004003d,
++    0x00000006, 0x0000008e, 0x00000082, 0x0004003d, 0x00000006, 0x00000090, 0x00000078, 0x00050085,
++    0x00000006, 0x00000092, 0x00000090, 0x00000091, 0x0007000c, 0x00000006, 0x00000093, 0x00000001,
++    0x00000028, 0x0000008f, 0x00000092, 0x000500b8, 0x0000001d, 0x00000094, 0x0000008e, 0x00000093,
++    0x000300f7, 0x00000096, 0x00000000, 0x000400fa, 0x00000094, 0x00000095, 0x00000096, 0x000200f8,
++    0x00000095, 0x0004003d, 0x00000034, 0x00000099, 0x0000004c, 0x0003003e, 0x00000098, 0x00000099,
++    0x000100fd, 0x000200f8, 0x00000096, 0x0004003d, 0x0000002f, 0x0000009c, 0x00000031, 0x0004003d,
++    0x0000000d, 0x0000009d, 0x00000044, 0x00080058, 0x00000034, 0x0000009f, 0x0000009c, 0x0000009d,
++    0x0000000a, 0x00000022, 0x0000009e, 0x0008004f, 0x00000007, 0x000000a1, 0x0000009f, 0x0000009f,
++    0x00000000, 0x00000001, 0x00000002, 0x0003003e, 0x000000a0, 0x000000a1, 0x00050039, 0x00000006,
++    0x000000a2, 0x0000000b, 0x000000a0, 0x0003003e, 0x0000009b, 0x000000a2, 0x0004003d, 0x0000002f,
++    0x000000a4, 0x00000031, 0x0004003d, 0x0000000d, 0x000000a5, 0x00000044, 0x00080058, 0x00000034,
++    0x000000a7, 0x000000a4, 0x000000a5, 0x0000000a, 0x00000022, 0x000000a6, 0x0008004f, 0x00000007,
++    0x000000a9, 0x000000a7, 0x000000a7, 0x00000000, 0x00000001, 0x00000002, 0x0003003e, 0x000000a8,
++    0x000000a9, 0x00050039, 0x00000006, 0x000000aa, 0x0000000b, 0x000000a8, 0x0003003e, 0x000000a3,
++    0x000000aa, 0x0004003d, 0x0000002f, 0x000000ac, 0x00000031, 0x0004003d, 0x0000000d, 0x000000ad,
++    0x00000044, 0x00080058, 0x00000034, 0x000000af, 0x000000ac, 0x000000ad, 0x0000000a, 0x00000022,
++    0x000000ae, 0x0008004f, 0x00000007, 0x000000b1, 0x000000af, 0x000000af, 0x00000000, 0x00000001,
++    0x00000002, 0x0003003e, 0x000000b0, 0x000000b1, 0x00050039, 0x00000006, 0x000000b2, 0x0000000b,
++    0x000000b0, 0x0003003e, 0x000000ab, 0x000000b2, 0x0004003d, 0x0000002f, 0x000000b4, 0x00000031,
++    0x0004003d, 0x0000000d, 0x000000b5, 0x00000044, 0x00080058, 0x00000034, 0x000000b7, 0x000000b4,
++    0x000000b5, 0x0000000a, 0x00000022, 0x000000b6, 0x0008004f, 0x00000007, 0x000000b9, 0x000000b7,
++    0x000000b7, 0x00000000, 0x00000001, 0x00000002, 0x0003003e, 0x000000b8, 0x000000b9, 0x00050039,
++    0x00000006, 0x000000ba, 0x0000000b, 0x000000b8, 0x0003003e, 0x000000b3, 0x000000ba, 0x0004003d,
++    0x00000006, 0x000000bc, 0x00000056, 0x0004003d, 0x00000006, 0x000000bd, 0x0000005f, 0x00050081,
++    0x00000006, 0x000000be, 0x000000bc, 0x000000bd, 0x0003003e, 0x000000bb, 0x000000be, 0x0004003d,
++    0x00000006, 0x000000c0, 0x00000068, 0x0004003d, 0x00000006, 0x000000c1, 0x00000070, 0x00050081,
++    0x00000006, 0x000000c2, 0x000000c0, 0x000000c1, 0x0003003e, 0x000000bf, 0x000000c2, 0x0004003d,
++    0x00000006, 0x000000c4, 0x0000009b, 0x0004003d, 0x00000006, 0x000000c5, 0x000000ab, 0x00050081,
++    0x00000006, 0x000000c6, 0x000000c4, 0x000000c5, 0x0004003d, 0x00000006, 0x000000c8, 0x00000068,
++    0x00050085, 0x00000006, 0x000000c9, 0x000000c7, 0x000000c8, 0x00050083, 0x00000006, 0x000000ca,
++    0x000000c6, 0x000000c9, 0x0006000c, 0x00000006, 0x000000cb, 0x00000001, 0x00000004, 0x000000ca,
++    0x0004003d, 0x00000006, 0x000000cc, 0x000000bb, 0x0004003d, 0x00000006, 0x000000cd, 0x00000051,
++    0x00050085, 0x00000006, 0x000000ce, 0x000000c7, 0x000000cd, 0x00050083, 0x00000006, 0x000000cf,
++    0x000000cc, 0x000000ce, 0x0006000c, 0x00000006, 0x000000d0, 0x00000001, 0x00000004, 0x000000cf,
++    0x00050085, 0x00000006, 0x000000d1, 0x000000c7, 0x000000d0, 0x00050081, 0x00000006, 0x000000d2,
++    0x000000cb, 0x000000d1, 0x0004003d, 0x00000006, 0x000000d3, 0x000000a3, 0x0004003d, 0x00000006,
++    0x000000d4, 0x000000b3, 0x00050081, 0x00000006, 0x000000d5, 0x000000d3, 0x000000d4, 0x0004003d,
++    0x00000006, 0x000000d6, 0x00000070, 0x00050085, 0x00000006, 0x000000d7, 0x000000c7, 0x000000d6,
++    0x00050083, 0x00000006, 0x000000d8, 0x000000d5, 0x000000d7, 0x0006000c, 0x00000006, 0x000000d9,
++    0x00000001, 0x00000004, 0x000000d8, 0x00050081, 0x00000006, 0x000000da, 0x000000d2, 0x000000d9,
++    0x0003003e, 0x000000c3, 0x000000da, 0x0004003d, 0x00000006, 0x000000dc, 0x000000ab, 0x0004003d,
++    0x00000006, 0x000000dd, 0x000000b3, 0x00050081, 0x00000006, 0x000000de, 0x000000dc, 0x000000dd,
++    0x0004003d, 0x00000006, 0x000000df, 0x0000005f, 0x00050085, 0x00000006, 0x000000e0, 0x000000c7,
++    0x000000df, 0x00050083, 0x00000006, 0x000000e1, 0x000000de, 0x000000e0, 0x0006000c, 0x00000006,
++    0x000000e2, 0x00000001, 0x00000004, 0x000000e1, 0x0004003d, 0x00000006, 0x000000e3, 0x000000bf,
++    0x0004003d, 0x00000006, 0x000000e4, 0x00000051, 0x00050085, 0x00000006, 0x000000e5, 0x000000c7,
++    0x000000e4, 0x00050083, 0x00000006, 0x000000e6, 0x000000e3, 0x000000e5, 0x0006000c, 0x00000006,
++    0x000000e7, 0x00000001, 0x00000004, 0x000000e6, 0x00050085, 0x00000006, 0x000000e8, 0x000000c7,
++    0x000000e7, 0x00050081, 0x00000006, 0x000000e9, 0x000000e2, 0x000000e8, 0x0004003d, 0x00000006,
++    0x000000ea, 0x0000009b, 0x0004003d, 0x00000006, 0x000000eb, 0x000000a3, 0x00050081, 0x00000006,
++    0x000000ec, 0x000000ea, 0x000000eb, 0x0004003d, 0x00000006, 0x000000ed, 0x00000056, 0x00050085,
++    0x00000006, 0x000000ee, 0x000000c7, 0x000000ed, 0x00050083, 0x00000006, 0x000000ef, 0x000000ec,
++    0x000000ee, 0x0006000c, 0x00000006, 0x000000f0, 0x00000001, 0x00000004, 0x000000ef, 0x00050081,
++    0x00000006, 0x000000f1, 0x000000e9, 0x000000f0, 0x0003003e, 0x000000db, 0x000000f1, 0x0004003d,
++    0x00000006, 0x000000f4, 0x000000c3, 0x0004003d, 0x00000006, 0x000000f5, 0x000000db, 0x000500be,
++    0x0000001d, 0x000000f6, 0x000000f4, 0x000000f5, 0x0003003e, 0x000000f3, 0x000000f6, 0x0004003d,
++    0x0000001d, 0x000000f8, 0x000000f3, 0x000300f7, 0x000000fb, 0x00000000, 0x000400fa, 0x000000f8,
++    0x000000fa, 0x000000ff, 0x000200f8, 0x000000fa, 0x00050041, 0x00000050, 0x000000fd, 0x0000003b,
++    0x000000fc, 0x0004003d, 0x00000006, 0x000000fe, 0x000000fd, 0x0003003e, 0x000000f9, 0x000000fe,
++    0x000200f9, 0x000000fb, 0x000200f8, 0x000000ff, 0x00050041, 0x00000050, 0x00000100, 0x0000003b,
++    0x0000001c, 0x0004003d, 0x00000006, 0x00000101, 0x00000100, 0x0003003e, 0x000000f9, 0x00000101,
++    0x000200f9, 0x000000fb, 0x000200f8, 0x000000fb, 0x0004003d, 0x00000006, 0x00000102, 0x000000f9,
++    0x0003003e, 0x000000f7, 0x00000102, 0x0004003d, 0x0000001d, 0x00000103, 0x000000f3, 0x000400a8,
++    0x0000001d, 0x00000104, 0x00000103, 0x000300f7, 0x00000106, 0x00000000, 0x000400fa, 0x00000104,
++    0x00000105, 0x00000106, 0x000200f8, 0x00000105, 0x0004003d, 0x00000006, 0x00000107, 0x00000068,
++    0x0003003e, 0x00000056, 0x00000107, 0x0004003d, 0x00000006, 0x00000108, 0x00000070, 0x0003003e,
++    0x0000005f, 0x00000108, 0x000200f9, 0x00000106, 0x000200f8, 0x00000106, 0x0004003d, 0x00000006,
++    0x0000010a, 0x00000056, 0x0004003d, 0x00000006, 0x0000010b, 0x00000051, 0x00050083, 0x00000006,
++    0x0000010c, 0x0000010a, 0x0000010b, 0x0003003e, 0x00000109, 0x0000010c, 0x0004003d, 0x00000006,
++    0x0000010e, 0x0000005f, 0x0004003d, 0x00000006, 0x0000010f, 0x00000051, 0x00050083, 0x00000006,
++    0x00000110, 0x0000010e, 0x0000010f, 0x0003003e, 0x0000010d, 0x00000110, 0x0004003d, 0x00000006,
++    0x00000112, 0x00000109, 0x0006000c, 0x00000006, 0x00000113, 0x00000001, 0x00000004, 0x00000112,
++    0x0004003d, 0x00000006, 0x00000114, 0x0000010d, 0x0006000c, 0x00000006, 0x00000115, 0x00000001,
++    0x00000004, 0x00000114, 0x000500be, 0x0000001d, 0x00000116, 0x00000113, 0x00000115, 0x0003003e,
++    0x00000111, 0x00000116, 0x0004003d, 0x00000006, 0x00000118, 0x00000109, 0x0006000c, 0x00000006,
++    0x00000119, 0x00000001, 0x00000004, 0x00000118, 0x0004003d, 0x00000006, 0x0000011a, 0x0000010d,
++    0x0006000c, 0x00000006, 0x0000011b, 0x00000001, 0x00000004, 0x0000011a, 0x0007000c, 0x00000006,
++    0x0000011c, 0x00000001, 0x00000028, 0x00000119, 0x0000011b, 0x00050085, 0x00000006, 0x0000011e,
++    0x0000011c, 0x0000011d, 0x0003003e, 0x00000117, 0x0000011e, 0x0004003d, 0x0000001d, 0x0000011f,
++    0x00000111, 0x000300f7, 0x00000121, 0x00000000, 0x000400fa, 0x0000011f, 0x00000120, 0x00000121,
++    0x000200f8, 0x00000120, 0x0004003d, 0x00000006, 0x00000122, 0x000000f7, 0x0004007f, 0x00000006,
++    0x00000123, 0x00000122, 0x0003003e, 0x000000f7, 0x00000123, 0x000200f9, 0x00000121, 0x000200f8,
++    0x00000121, 0x0004003d, 0x0000001d, 0x00000125, 0x00000111, 0x0004003d, 0x00000006, 0x00000126,
++    0x00000056, 0x0004003d, 0x00000006, 0x00000127, 0x0000005f, 0x000600a9, 0x00000006, 0x00000128,
++    0x00000125, 0x00000126, 0x00000127, 0x0004003d, 0x00000006, 0x00000129, 0x00000051, 0x00050081,
++    0x00000006, 0x0000012a, 0x00000128, 0x00000129, 0x00050085, 0x00000006, 0x0000012c, 0x0000012a,
++    0x0000012b, 0x0003003e, 0x00000124, 0x0000012c, 0x0004003d, 0x0000000d, 0x0000012e, 0x00000044,
++    0x0004003d, 0x0000001d, 0x0000012f, 0x000000f3, 0x000300f7, 0x00000132, 0x00000000, 0x000400fa,
++    0x0000012f, 0x00000131, 0x00000135, 0x000200f8, 0x00000131, 0x0004003d, 0x00000006, 0x00000133,
++    0x000000f7, 0x00050050, 0x0000000d, 0x00000134, 0x00000022, 0x00000133, 0x0003003e, 0x00000130,
++    0x00000134, 0x000200f9, 0x00000132, 0x000200f8, 0x00000135, 0x0004003d, 0x00000006, 0x00000136,
++    0x000000f7, 0x00050050, 0x0000000d, 0x00000137, 0x00000136, 0x00000022, 0x0003003e, 0x00000130,
++    0x00000137, 0x000200f9, 0x00000132, 0x000200f8, 0x00000132, 0x0004003d, 0x0000000d, 0x00000138,
++    0x00000130, 0x0005008e, 0x0000000d, 0x00000139, 0x00000138, 0x0000012b, 0x00050081, 0x0000000d,
++    0x0000013a, 0x0000012e, 0x00000139, 0x0003003e, 0x0000012d, 0x0000013a, 0x0004003d, 0x0000001d,
++    0x0000013c, 0x000000f3, 0x000300f7, 0x0000013f, 0x00000000, 0x000400fa, 0x0000013c, 0x0000013e,
++    0x00000143, 0x000200f8, 0x0000013e, 0x00050041, 0x00000050, 0x00000140, 0x0000003b, 0x0000001c,
++    0x0004003d, 0x00000006, 0x00000141, 0x00000140, 0x00050050, 0x0000000d, 0x00000142, 0x00000141,
++    0x00000022, 0x0003003e, 0x0000013d, 0x00000142, 0x000200f9, 0x0000013f, 0x000200f8, 0x00000143,
++    0x00050041, 0x00000050, 0x00000144, 0x0000003b, 0x000000fc, 0x0004003d, 0x00000006, 0x00000145,
++    0x00000144, 0x00050050, 0x0000000d, 0x00000146, 0x00000022, 0x00000145, 0x0003003e, 0x0000013d,
++    0x00000146, 0x000200f9, 0x0000013f, 0x000200f8, 0x0000013f, 0x0004003d, 0x0000000d, 0x00000147,
++    0x0000013d, 0x0003003e, 0x0000013b, 0x00000147, 0x0004003d, 0x0000000d, 0x00000149, 0x0000012d,
++    0x0004003d, 0x0000000d, 0x0000014a, 0x0000013b, 0x0005008e, 0x0000000d, 0x0000014b, 0x0000014a,
++    0x0000003c, 0x00050083, 0x0000000d, 0x0000014c, 0x00000149, 0x0000014b, 0x0003003e, 0x00000148,
++    0x0000014c, 0x0004003d, 0x0000000d, 0x0000014e, 0x0000012d, 0x0004003d, 0x0000000d, 0x0000014f,
++    0x0000013b, 0x0005008e, 0x0000000d, 0x00000150, 0x0000014f, 0x0000003c, 0x00050081, 0x0000000d,
++    0x00000151, 0x0000014e, 0x00000150, 0x0003003e, 0x0000014d, 0x00000151, 0x0004003d, 0x0000000d,
++    0x00000154, 0x00000148, 0x0003003e, 0x00000153, 0x00000154, 0x00050039, 0x00000006, 0x00000155,
++    0x00000011, 0x00000153, 0x0004003d, 0x00000006, 0x00000156, 0x00000124, 0x00050083, 0x00000006,
++    0x00000157, 0x00000155, 0x00000156, 0x0003003e, 0x00000152, 0x00000157, 0x0004003d, 0x0000000d,
++    0x0000015a, 0x0000014d, 0x0003003e, 0x00000159, 0x0000015a, 0x00050039, 0x00000006, 0x0000015b,
++    0x00000011, 0x00000159, 0x0004003d, 0x00000006, 0x0000015c, 0x00000124, 0x00050083, 0x00000006,
++    0x0000015d, 0x0000015b, 0x0000015c, 0x0003003e, 0x00000158, 0x0000015d, 0x0004003d, 0x00000006,
++    0x0000015f, 0x00000152, 0x0006000c, 0x00000006, 0x00000160, 0x00000001, 0x00000004, 0x0000015f,
++    0x0004003d, 0x00000006, 0x00000161, 0x00000117, 0x000500be, 0x0000001d, 0x00000162, 0x00000160,
++    0x00000161, 0x0003003e, 0x0000015e, 0x00000162, 0x0004003d, 0x00000006, 0x00000164, 0x00000158,
++    0x0006000c, 0x00000006, 0x00000165, 0x00000001, 0x00000004, 0x00000164, 0x0004003d, 0x00000006,
++    0x00000166, 0x00000117, 0x000500be, 0x0000001d, 0x00000167, 0x00000165, 0x00000166, 0x0003003e,
++    0x00000163, 0x00000167, 0x0003003e, 0x00000169, 0x00000062, 0x000200f9, 0x0000016a, 0x000200f8,
++    0x0000016a, 0x000400f6, 0x0000016c, 0x0000016d, 0x00000000, 0x000200f9, 0x0000016e, 0x000200f8,
++    0x0000016e, 0x0004003d, 0x00000017, 0x0000016f, 0x00000169, 0x000500b1, 0x0000001d, 0x00000171,
++    0x0000016f, 0x00000170, 0x000300f7, 0x00000173, 0x00000000, 0x000400fa, 0x00000171, 0x00000172,
++    0x00000173, 0x000200f8, 0x00000172, 0x0004003d, 0x0000001d, 0x00000174, 0x0000015e, 0x0004003d,
++    0x0000001d, 0x00000175, 0x00000163, 0x000500a7, 0x0000001d, 0x00000176, 0x00000174, 0x00000175,
++    0x000400a8, 0x0000001d, 0x00000177, 0x00000176, 0x000200f9, 0x00000173, 0x000200f8, 0x00000173,
++    0x000700f5, 0x0000001d, 0x00000178, 0x00000171, 0x0000016e, 0x00000177, 0x00000172, 0x000400fa,
++    0x00000178, 0x0000016b, 0x0000016c, 0x000200f8, 0x0000016b, 0x0004003d, 0x0000001d, 0x00000179,
++    0x0000015e, 0x000400a8, 0x0000001d, 0x0000017a, 0x00000179, 0x000300f7, 0x0000017c, 0x00000000,
++    0x000400fa, 0x0000017a, 0x0000017b, 0x0000017c, 0x000200f8, 0x0000017b, 0x0004003d, 0x0000000d,
++    0x0000017d, 0x0000013b, 0x0004003d, 0x00000017, 0x00000184, 0x00000169, 0x0003003e, 0x00000186,
++    0x00000183, 0x00050041, 0x00000050, 0x00000187, 0x00000186, 0x00000184, 0x0004003d, 0x00000006,
++    0x00000188, 0x00000187, 0x0005008e, 0x0000000d, 0x00000189, 0x0000017d, 0x00000188, 0x0004003d,
++    0x0000000d, 0x0000018a, 0x00000148, 0x00050083, 0x0000000d, 0x0000018b, 0x0000018a, 0x00000189,
++    0x0003003e, 0x00000148, 0x0000018b, 0x000200f9, 0x0000017c, 0x000200f8, 0x0000017c, 0x0004003d,
++    0x0000001d, 0x0000018c, 0x00000163, 0x000400a8, 0x0000001d, 0x0000018d, 0x0000018c, 0x000300f7,
++    0x0000018f, 0x00000000, 0x000400fa, 0x0000018d, 0x0000018e, 0x0000018f, 0x000200f8, 0x0000018e,
++    0x0004003d, 0x0000000d, 0x00000190, 0x0000013b, 0x0004003d, 0x00000017, 0x00000191, 0x00000169,
++    0x0003003e, 0x00000192, 0x00000183, 0x00050041, 0x00000050, 0x00000193, 0x00000192, 0x00000191,
++    0x0004003d, 0x00000006, 0x00000194, 0x00000193, 0x0005008e, 0x0000000d, 0x00000195, 0x00000190,
++    0x00000194, 0x0004003d, 0x0000000d, 0x00000196, 0x0000014d, 0x00050081, 0x0000000d, 0x00000197,
++    0x00000196, 0x00000195, 0x0003003e, 0x0000014d, 0x00000197, 0x000200f9, 0x0000018f, 0x000200f8,
++    0x0000018f, 0x0004003d, 0x00000017, 0x00000198, 0x00000169, 0x000500aa, 0x0000001d, 0x0000019a,
++    0x00000198, 0x00000199, 0x000300f7, 0x0000019c, 0x00000000, 0x000400fa, 0x0000019a, 0x0000019b,
++    0x0000019c, 0x000200f8, 0x0000019b, 0x000200f9, 0x0000016c, 0x000200f8, 0x0000019c, 0x0004003d,
++    0x0000001d, 0x0000019e, 0x0000015e, 0x000400a8, 0x0000001d, 0x0000019f, 0x0000019e, 0x000300f7,
++    0x000001a1, 0x00000000, 0x000400fa, 0x0000019f, 0x000001a0, 0x000001a1, 0x000200f8, 0x000001a0,
++    0x0004003d, 0x0000000d, 0x000001a3, 0x00000148, 0x0003003e, 0x000001a2, 0x000001a3, 0x00050039,
++    0x00000006, 0x000001a4, 0x00000011, 0x000001a2, 0x0004003d, 0x00000006, 0x000001a5, 0x00000124,
++    0x00050083, 0x00000006, 0x000001a6, 0x000001a4, 0x000001a5, 0x0003003e, 0x00000152, 0x000001a6,
++    0x0004003d, 0x00000006, 0x000001a7, 0x00000152, 0x0006000c, 0x00000006, 0x000001a8, 0x00000001,
++    0x00000004, 0x000001a7, 0x0004003d, 0x00000006, 0x000001a9, 0x00000117, 0x000500be, 0x0000001d,
++    0x000001aa, 0x000001a8, 0x000001a9, 0x0003003e, 0x0000015e, 0x000001aa, 0x000200f9, 0x000001a1,
++    0x000200f8, 0x000001a1, 0x0004003d, 0x0000001d, 0x000001ab, 0x00000163, 0x000400a8, 0x0000001d,
++    0x000001ac, 0x000001ab, 0x000300f7, 0x000001ae, 0x00000000, 0x000400fa, 0x000001ac, 0x000001ad,
++    0x000001ae, 0x000200f8, 0x000001ad, 0x0004003d, 0x0000000d, 0x000001b0, 0x0000014d, 0x0003003e,
++    0x000001af, 0x000001b0, 0x00050039, 0x00000006, 0x000001b1, 0x00000011, 0x000001af, 0x0004003d,
++    0x00000006, 0x000001b2, 0x00000124, 0x00050083, 0x00000006, 0x000001b3, 0x000001b1, 0x000001b2,
++    0x0003003e, 0x00000158, 0x000001b3, 0x0004003d, 0x00000006, 0x000001b4, 0x00000158, 0x0006000c,
++    0x00000006, 0x000001b5, 0x00000001, 0x00000004, 0x000001b4, 0x0004003d, 0x00000006, 0x000001b6,
++    0x00000117, 0x000500be, 0x0000001d, 0x000001b7, 0x000001b5, 0x000001b6, 0x0003003e, 0x00000163,
++    0x000001b7, 0x000200f9, 0x000001ae, 0x000200f8, 0x000001ae, 0x000200f9, 0x0000016d, 0x000200f8,
++    0x0000016d, 0x0004003d, 0x00000017, 0x000001b8, 0x00000169, 0x00050080, 0x00000017, 0x000001b9,
++    0x000001b8, 0x00000062, 0x0003003e, 0x00000169, 0x000001b9, 0x000200f9, 0x0000016a, 0x000200f8,
++    0x0000016c, 0x0004003d, 0x0000001d, 0x000001bb, 0x000000f3, 0x000300f7, 0x000001be, 0x00000000,
++    0x000400fa, 0x000001bb, 0x000001bd, 0x000001c4, 0x000200f8, 0x000001bd, 0x00050041, 0x00000050,
++    0x000001bf, 0x00000044, 0x0000001c, 0x0004003d, 0x00000006, 0x000001c0, 0x000001bf, 0x00050041,
++    0x00000050, 0x000001c1, 0x00000148, 0x0000001c, 0x0004003d, 0x00000006, 0x000001c2, 0x000001c1,
++    0x00050083, 0x00000006, 0x000001c3, 0x000001c0, 0x000001c2, 0x0003003e, 0x000001bc, 0x000001c3,
++    0x000200f9, 0x000001be, 0x000200f8, 0x000001c4, 0x00050041, 0x00000050, 0x000001c5, 0x00000044,
++    0x000000fc, 0x0004003d, 0x00000006, 0x000001c6, 0x000001c5, 0x00050041, 0x00000050, 0x000001c7,
++    0x00000148, 0x000000fc, 0x0004003d, 0x00000006, 0x000001c8, 0x000001c7, 0x00050083, 0x00000006,
++    0x000001c9, 0x000001c6, 0x000001c8, 0x0003003e, 0x000001bc, 0x000001c9, 0x000200f9, 0x000001be,
++    0x000200f8, 0x000001be, 0x0004003d, 0x00000006, 0x000001ca, 0x000001bc, 0x0003003e, 0x000001ba,
++    0x000001ca, 0x0004003d, 0x0000001d, 0x000001cc, 0x000000f3, 0x000300f7, 0x000001cf, 0x00000000,
++    0x000400fa, 0x000001cc, 0x000001ce, 0x000001d5, 0x000200f8, 0x000001ce, 0x00050041, 0x00000050,
++    0x000001d0, 0x0000014d, 0x0000001c, 0x0004003d, 0x00000006, 0x000001d1, 0x000001d0, 0x00050041,
++    0x00000050, 0x000001d2, 0x00000044, 0x0000001c, 0x0004003d, 0x00000006, 0x000001d3, 0x000001d2,
++    0x00050083, 0x00000006, 0x000001d4, 0x000001d1, 0x000001d3, 0x0003003e, 0x000001cd, 0x000001d4,
++    0x000200f9, 0x000001cf, 0x000200f8, 0x000001d5, 0x00050041, 0x00000050, 0x000001d6, 0x0000014d,
++    0x000000fc, 0x0004003d, 0x00000006, 0x000001d7, 0x000001d6, 0x00050041, 0x00000050, 0x000001d8,
++    0x00000044, 0x000000fc, 0x0004003d, 0x00000006, 0x000001d9, 0x000001d8, 0x00050083, 0x00000006,
++    0x000001da, 0x000001d7, 0x000001d9, 0x0003003e, 0x000001cd, 0x000001da, 0x000200f9, 0x000001cf,
++    0x000200f8, 0x000001cf, 0x0004003d, 0x00000006, 0x000001db, 0x000001cd, 0x0003003e, 0x000001cb,
++    0x000001db, 0x0004003d, 0x00000006, 0x000001dd, 0x000001ba, 0x0004003d, 0x00000006, 0x000001de,
++    0x000001cb, 0x000500b8, 0x0000001d, 0x000001df, 0x000001dd, 0x000001de, 0x0004003d, 0x00000006,
++    0x000001e0, 0x00000152, 0x0004003d, 0x00000006, 0x000001e1, 0x00000158, 0x000600a9, 0x00000006,
++    0x000001e2, 0x000001df, 0x000001e0, 0x000001e1, 0x000500b8, 0x0000001d, 0x000001e3, 0x000001e2,
++    0x00000022, 0x0004003d, 0x00000006, 0x000001e4, 0x00000051, 0x0004003d, 0x00000006, 0x000001e5,
++    0x00000124, 0x000500b8, 0x0000001d, 0x000001e6, 0x000001e4, 0x000001e5, 0x000500a5, 0x0000001d,
++    0x000001e7, 0x000001e3, 0x000001e6, 0x0003003e, 0x000001dc, 0x000001e7, 0x0004003d, 0x0000001d,
++    0x000001e9, 0x000001dc, 0x000300f7, 0x000001ec, 0x00000000, 0x000400fa, 0x000001e9, 0x000001eb,
++    0x000001f5, 0x000200f8, 0x000001eb, 0x0004003d, 0x00000006, 0x000001ed, 0x000001ba, 0x0004003d,
++    0x00000006, 0x000001ee, 0x000001cb, 0x0007000c, 0x00000006, 0x000001ef, 0x00000001, 0x00000025,
++    0x000001ed, 0x000001ee, 0x0004003d, 0x00000006, 0x000001f0, 0x000001ba, 0x0004003d, 0x00000006,
++    0x000001f1, 0x000001cb, 0x00050081, 0x00000006, 0x000001f2, 0x000001f0, 0x000001f1, 0x00050088,
++    0x00000006, 0x000001f3, 0x000001ef, 0x000001f2, 0x00050083, 0x00000006, 0x000001f4, 0x0000012b,
++    0x000001f3, 0x0003003e, 0x000001ea, 0x000001f4, 0x000200f9, 0x000001ec, 0x000200f8, 0x000001f5,
++    0x0003003e, 0x000001ea, 0x00000022, 0x000200f9, 0x000001ec, 0x000200f8, 0x000001ec, 0x0004003d,
++    0x00000006, 0x000001f6, 0x000001ea, 0x0004003d, 0x00000006, 0x000001f7, 0x000000f7, 0x00050085,
++    0x00000006, 0x000001f8, 0x000001f6, 0x000001f7, 0x0003003e, 0x000001e8, 0x000001f8, 0x0004003d,
++    0x0000002f, 0x000001f9, 0x00000031, 0x0004003d, 0x0000000d, 0x000001fa, 0x00000044, 0x0004003d,
++    0x0000001d, 0x000001fb, 0x000000f3, 0x000300f7, 0x000001fe, 0x00000000, 0x000400fa, 0x000001fb,
++    0x000001fd, 0x00000201, 0x000200f8, 0x000001fd, 0x0004003d, 0x00000006, 0x000001ff, 0x000001e8,
++    0x00050050, 0x0000000d, 0x00000200, 0x00000022, 0x000001ff, 0x0003003e, 0x000001fc, 0x00000200,
++    0x000200f9, 0x000001fe, 0x000200f8, 0x00000201, 0x0004003d, 0x00000006, 0x00000202, 0x000001e8,
++    0x00050050, 0x0000000d, 0x00000203, 0x00000202, 0x00000022, 0x0003003e, 0x000001fc, 0x00000203,
++    0x000200f9, 0x000001fe, 0x000200f8, 0x000001fe, 0x0004003d, 0x0000000d, 0x00000204, 0x000001fc,
++    0x00050081, 0x0000000d, 0x00000205, 0x000001fa, 0x00000204, 0x00070058, 0x00000034, 0x00000206,
++    0x000001f9, 0x00000205, 0x00000002, 0x00000022, 0x0008004f, 0x00000007, 0x00000207, 0x00000206,
++    0x00000206, 0x00000000, 0x00000001, 0x00000002, 0x00050041, 0x00000050, 0x00000209, 0x0000004c,
++    0x00000208, 0x0004003d, 0x00000006, 0x0000020a, 0x00000209, 0x00050051, 0x00000006, 0x0000020b,
++    0x00000207, 0x00000000, 0x00050051, 0x00000006, 0x0000020c, 0x00000207, 0x00000001, 0x00050051,
++    0x00000006, 0x0000020d, 0x00000207, 0x00000002, 0x00070050, 0x00000034, 0x0000020e, 0x0000020b,
++    0x0000020c, 0x0000020d, 0x0000020a, 0x0003003e, 0x00000098, 0x0000020e, 0x000100fd, 0x00010038,
++    0x00050036, 0x00000006, 0x0000000b, 0x00000000, 0x00000009, 0x00030037, 0x00000008, 0x0000000a,
++    0x000200f8, 0x0000000c, 0x00050041, 0x00000019, 0x0000001a, 0x00000016, 0x00000018, 0x0004003d,
++    0x00000013, 0x0000001b, 0x0000001a, 0x000500ab, 0x0000001d, 0x0000001e, 0x0000001b, 0x0000001c,
++    0x000300f7, 0x00000020, 0x00000000, 0x000400fa, 0x0000001e, 0x0000001f, 0x00000020, 0x000200f8,
++    0x0000001f, 0x0004003d, 0x00000007, 0x00000021, 0x0000000a, 0x0007000c, 0x00000007, 0x00000024,
++    0x00000001, 0x00000028, 0x00000021, 0x00000023, 0x0006000c, 0x00000007, 0x00000025, 0x00000001,
++    0x0000001f, 0x00000024, 0x0003003e, 0x0000000a, 0x00000025, 0x000200f9, 0x00000020, 0x000200f8,
++    0x00000020, 0x0004003d, 0x00000007, 0x00000026, 0x0000000a, 0x00050094, 0x00000006, 0x0000002b,
++    0x00000026, 0x0000002a, 0x000200fe, 0x0000002b, 0x00010038, 0x00050036, 0x00000006, 0x00000011,
++    0x00000000, 0x0000000f, 0x00030037, 0x0000000e, 0x00000010, 0x000200f8, 0x00000012, 0x0004003b,
++    0x00000008, 0x00000036, 0x00000007, 0x0004003d, 0x0000002f, 0x00000032, 0x00000031, 0x0004003d,
++    0x0000000d, 0x00000033, 0x00000010, 0x00070058, 0x00000034, 0x00000035, 0x00000032, 0x00000033,
++    0x00000002, 0x00000022, 0x0008004f, 0x00000007, 0x00000037, 0x00000035, 0x00000035, 0x00000000,
++    0x00000001, 0x00000002, 0x0003003e, 0x00000036, 0x00000037, 0x00050039, 0x00000006, 0x00000038,
++    0x0000000b, 0x00000036, 0x000200fe, 0x00000038, 0x00010038,
++};
++inline constexpr size_t kFxaaFastFragSize = sizeof(kFxaaFastFrag);
++
++}  // namespace dsr::hle::nvn::postfx_spv
+diff --git a/src/hle/nvn/shaders/fsr1.vert b/src/hle/nvn/shaders/fsr1.vert
+new file mode 100644
+index 0000000..e2b4d5f
+--- /dev/null
++++ b/src/hle/nvn/shaders/fsr1.vert
+@@ -0,0 +1,6 @@
++#version 450
++// A full-screen triangle (no vertex input).
++void main() {
++    vec2 p = vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2));
++    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
++}
+diff --git a/src/hle/nvn/shaders/fsr1_easu.frag b/src/hle/nvn/shaders/fsr1_easu.frag
+new file mode 100644
+index 0000000..11977c0
+--- /dev/null
++++ b/src/hle/nvn/shaders/fsr1_easu.frag
+@@ -0,0 +1,286 @@
++// FidelityFX FSR 1 (EASU / RCAS), adapted from AMD's FidelityFX SDK 1.1.4 gpu/fsr1/ffx_fsr1.h, MIT license:
++// Copyright (C) 2024 Advanced Micro Devices, Inc. See third_party/fsr1/LICENSE.txt. Only the types and helper
++// functions the two filters use are defined here (the approximate reciprocals are exact ones).
++#version 450
++#define FfxFloat32 float
++#define FfxFloat32x2 vec2
++#define FfxFloat32x3 vec3
++#define FfxFloat32x4 vec4
++#define FfxUInt32x2 uvec2
++#define FfxUInt32x4 uvec4
++#define FfxInt32x2 ivec2
++#define FfxBoolean bool
++#define FFX_TRUE true
++#define FFX_FALSE false
++#define FFX_PARAMETER_IN in
++#define FFX_PARAMETER_OUT out
++#define FFX_PARAMETER_INOUT inout
++#define ffxAsFloat uintBitsToFloat
++#define ffxMin min
++#define ffxMin3(a, b, c) min(a, min(b, c))
++#define ffxMax3(a, b, c) max(a, max(b, c))
++#define ffxSaturate(x) clamp(x, 0.0, 1.0)
++#define ffxReciprocal(x) (1.0 / (x))
++#define ffxApproximateReciprocal(x) (1.0 / (x))
++#define ffxApproximateReciprocalMedium(x) (1.0 / (x))
++#define ffxApproximateReciprocalSquareRoot(x) inversesqrt(x)
++#define ffxBroadcast2(x) vec2(x)
++#define ffxBroadcast3(x) vec3(x)
++#define ffxBroadcast4(x) vec4(x)
++
++layout(set = 0, binding = 0) uniform sampler2D uTex;
++layout(push_constant) uniform PC { uvec4 con0; uvec4 con1; uvec4 con2; uvec4 con3; } pc;
++layout(location = 0) out vec4 outColor;
++vec4 FsrEasuRF(vec2 p) { return textureGather(uTex, p, 0); }
++vec4 FsrEasuGF(vec2 p) { return textureGather(uTex, p, 1); }
++vec4 FsrEasuBF(vec2 p) { return textureGather(uTex, p, 2); }
++// Filtering for a given tap for the scalar.
++void fsrEasuTapFloat(
++    FFX_PARAMETER_INOUT FfxFloat32x3 accumulatedColor,   // Accumulated color, with negative lobe.
++    FFX_PARAMETER_INOUT FfxFloat32 accumulatedWeight,    // Accumulated weight.
++    FFX_PARAMETER_IN FfxFloat32x2 pixelOffset,           // Pixel offset from resolve position to tap.
++    FFX_PARAMETER_IN FfxFloat32x2 gradientDirection,     // Gradient direction.
++    FFX_PARAMETER_IN FfxFloat32x2 length,                // Length.
++    FFX_PARAMETER_IN FfxFloat32 negativeLobeStrength,    // Negative lobe strength.
++    FFX_PARAMETER_IN FfxFloat32 clippingPoint,           // Clipping point.
++    FFX_PARAMETER_IN FfxFloat32x3 color)                 // Tap color.
++{
++    // Rotate offset by direction.
++    FfxFloat32x2 rotatedOffset;
++    rotatedOffset.x = (pixelOffset.x * (gradientDirection.x)) + (pixelOffset.y * gradientDirection.y);
++    rotatedOffset.y = (pixelOffset.x * (-gradientDirection.y)) + (pixelOffset.y * gradientDirection.x);
++
++    // Anisotropy.
++    rotatedOffset *= length;
++
++    // Compute distance^2.
++    FfxFloat32 distanceSquared = rotatedOffset.x * rotatedOffset.x + rotatedOffset.y * rotatedOffset.y;
++
++    // Limit to the window as at corner, 2 taps can easily be outside.
++    distanceSquared = ffxMin(distanceSquared, clippingPoint);
++
++    // Approximation of lancos2 without sin() or rcp(), or sqrt() to get x.
++    //  (25/16 * (2/5 * x^2 - 1)^2 - (25/16 - 1)) * (1/4 * x^2 - 1)^2
++    //  |_______________________________________|   |_______________|
++    //                   base                             window
++    // The general form of the 'base' is,
++    //  (a*(b*x^2-1)^2-(a-1))
++    // Where 'a=1/(2*b-b^2)' and 'b' moves around the negative lobe.
++    FfxFloat32 weightB = FfxFloat32(2.0 / 5.0) * distanceSquared + FfxFloat32(-1.0);
++    FfxFloat32 weightA = negativeLobeStrength * distanceSquared + FfxFloat32(-1.0);
++    weightB *= weightB;
++    weightA *= weightA;
++    weightB = FfxFloat32(25.0 / 16.0) * weightB + FfxFloat32(-(25.0 / 16.0 - 1.0));
++    FfxFloat32 weight = weightB * weightA;
++
++    // Do weighted average.
++    accumulatedColor += color * weight;
++    accumulatedWeight += weight;
++}
++
++// Accumulate direction and length.
++void fsrEasuSetFloat(
++    FFX_PARAMETER_INOUT FfxFloat32x2 direction,
++    FFX_PARAMETER_INOUT FfxFloat32 length,
++    FFX_PARAMETER_IN FfxFloat32x2 pp,
++    FFX_PARAMETER_IN FfxBoolean biS,
++    FFX_PARAMETER_IN FfxBoolean biT,
++    FFX_PARAMETER_IN FfxBoolean biU,
++    FFX_PARAMETER_IN FfxBoolean biV,
++    FFX_PARAMETER_IN FfxFloat32 lA,
++    FFX_PARAMETER_IN FfxFloat32 lB,
++    FFX_PARAMETER_IN FfxFloat32 lC,
++    FFX_PARAMETER_IN FfxFloat32 lD,
++    FFX_PARAMETER_IN FfxFloat32 lE)
++{
++    // Compute bilinear weight, branches factor out as predicates are compiler time immediates.
++    //  s t
++    //  u v
++    FfxFloat32 weight = FfxFloat32(0.0);
++    if (biS)
++        weight = (FfxFloat32(1.0) - pp.x) * (FfxFloat32(1.0) - pp.y);
++    if (biT)
++        weight = pp.x * (FfxFloat32(1.0) - pp.y);
++    if (biU)
++        weight = (FfxFloat32(1.0) - pp.x) * pp.y;
++    if (biV)
++        weight = pp.x * pp.y;
++
++    // Direction is the '+' diff.
++    //    a
++    //  b c d
++    //    e
++    // Then takes magnitude from abs average of both sides of 'c'.
++    // Length converts gradient reversal to 0, smoothly to non-reversal at 1, shaped, then adding horz and vert terms.
++    FfxFloat32 dc = lD - lC;
++    FfxFloat32 cb = lC - lB;
++    FfxFloat32 lengthX = max(abs(dc), abs(cb));
++    lengthX = ffxApproximateReciprocal(lengthX);
++    FfxFloat32 directionX = lD - lB;
++    direction.x += directionX * weight;
++    lengthX = ffxSaturate(abs(directionX) * lengthX);
++    lengthX *= lengthX;
++    length += lengthX * weight;
++
++    // Repeat for the y axis.
++    FfxFloat32 ec = lE - lC;
++    FfxFloat32 ca = lC - lA;
++    FfxFloat32 lengthY = max(abs(ec), abs(ca));
++    lengthY = ffxApproximateReciprocal(lengthY);
++    FfxFloat32 directionY = lE - lA;
++    direction.y += directionY * weight;
++    lengthY = ffxSaturate(abs(directionY) * lengthY);
++    lengthY *= lengthY;
++    length += lengthY * weight;
++}
++
++/// Apply edge-aware spatial upsampling using 32bit floating point precision calculations.
++///
++/// @param [out] outPixel               The computed color of a pixel.
++/// @param [in]  integerPosition        Integer pixel position within the output.
++/// @param [in]  con0                   The first constant value generated by <c><i>ffxFsrPopulateEasuConstants</i></c>.
++/// @param [in]  con1                   The second constant value generated by <c><i>ffxFsrPopulateEasuConstants</i></c>.
++/// @param [in]  con2                   The third constant value generated by <c><i>ffxFsrPopulateEasuConstants</i></c>.
++/// @param [in]  con3                   The fourth constant value generated by <c><i>ffxFsrPopulateEasuConstants</i></c>.
++/// 
++/// @ingroup FSR
++void ffxFsrEasuFloat(
++    FFX_PARAMETER_OUT FfxFloat32x3 pix,
++    FFX_PARAMETER_IN FfxUInt32x2 ip,
++    FFX_PARAMETER_IN FfxUInt32x4 con0,
++    FFX_PARAMETER_IN FfxUInt32x4 con1,
++    FFX_PARAMETER_IN FfxUInt32x4 con2,
++    FFX_PARAMETER_IN FfxUInt32x4 con3)
++{
++    // Get position of 'f'.
++    FfxFloat32x2 pp = FfxFloat32x2(ip) * ffxAsFloat(con0.xy) + ffxAsFloat(con0.zw);
++    FfxFloat32x2 fp = floor(pp);
++    pp -= fp;
++
++    // 12-tap kernel.
++    //    b c
++    //  e f g h
++    //  i j k l
++    //    n o
++    // Gather 4 ordering.
++    //  a b
++    //  r g
++    // For packed FP16, need either {rg} or {ab} so using the following setup for gather in all versions,
++    //    a b    <- unused (z)
++    //    r g
++    //  a b a b
++    //  r g r g
++    //    a b
++    //    r g    <- unused (z)
++    // Allowing dead-code removal to remove the 'z's.
++    FfxFloat32x2 p0 = fp * ffxAsFloat(con1.xy) + ffxAsFloat(con1.zw);
++
++    // These are from p0 to avoid pulling two constants on pre-Navi hardware.
++    FfxFloat32x2 p1    = p0 + ffxAsFloat(con2.xy);
++    FfxFloat32x2 p2    = p0 + ffxAsFloat(con2.zw);
++    FfxFloat32x2 p3    = p0 + ffxAsFloat(con3.xy);
++    FfxFloat32x4 bczzR = FsrEasuRF(p0);
++    FfxFloat32x4 bczzG = FsrEasuGF(p0);
++    FfxFloat32x4 bczzB = FsrEasuBF(p0);
++    FfxFloat32x4 ijfeR = FsrEasuRF(p1);
++    FfxFloat32x4 ijfeG = FsrEasuGF(p1);
++    FfxFloat32x4 ijfeB = FsrEasuBF(p1);
++    FfxFloat32x4 klhgR = FsrEasuRF(p2);
++    FfxFloat32x4 klhgG = FsrEasuGF(p2);
++    FfxFloat32x4 klhgB = FsrEasuBF(p2);
++    FfxFloat32x4 zzonR = FsrEasuRF(p3);
++    FfxFloat32x4 zzonG = FsrEasuGF(p3);
++    FfxFloat32x4 zzonB = FsrEasuBF(p3);
++
++    // Simplest multi-channel approximate luma possible (luma times 2, in 2 FMA/MAD).
++    FfxFloat32x4 bczzL = bczzB * ffxBroadcast4(0.5) + (bczzR * ffxBroadcast4(0.5) + bczzG);
++    FfxFloat32x4 ijfeL = ijfeB * ffxBroadcast4(0.5) + (ijfeR * ffxBroadcast4(0.5) + ijfeG);
++    FfxFloat32x4 klhgL = klhgB * ffxBroadcast4(0.5) + (klhgR * ffxBroadcast4(0.5) + klhgG);
++    FfxFloat32x4 zzonL = zzonB * ffxBroadcast4(0.5) + (zzonR * ffxBroadcast4(0.5) + zzonG);
++
++    // Rename.
++    FfxFloat32 bL = bczzL.x;
++    FfxFloat32 cL = bczzL.y;
++    FfxFloat32 iL = ijfeL.x;
++    FfxFloat32 jL = ijfeL.y;
++    FfxFloat32 fL = ijfeL.z;
++    FfxFloat32 eL = ijfeL.w;
++    FfxFloat32 kL = klhgL.x;
++    FfxFloat32 lL = klhgL.y;
++    FfxFloat32 hL = klhgL.z;
++    FfxFloat32 gL = klhgL.w;
++    FfxFloat32 oL = zzonL.z;
++    FfxFloat32 nL = zzonL.w;
++
++    // Accumulate for bilinear interpolation.
++    FfxFloat32x2 dir = ffxBroadcast2(0.0);
++    FfxFloat32  len = FfxFloat32(0.0);
++    fsrEasuSetFloat(dir, len, pp, FFX_TRUE,  FFX_FALSE, FFX_FALSE, FFX_FALSE, bL, eL, fL, gL, jL);
++    fsrEasuSetFloat(dir, len, pp, FFX_FALSE, FFX_TRUE,  FFX_FALSE, FFX_FALSE, cL, fL, gL, hL, kL);
++    fsrEasuSetFloat(dir, len, pp, FFX_FALSE, FFX_FALSE, FFX_TRUE,  FFX_FALSE, fL, iL, jL, kL, nL);
++    fsrEasuSetFloat(dir, len, pp, FFX_FALSE, FFX_FALSE, FFX_FALSE, FFX_TRUE,  gL, jL, kL, lL, oL);
++
++    // Normalize with approximation, and cleanup close to zero.
++    FfxFloat32x2 dir2 = dir * dir;
++    FfxFloat32 dirR = dir2.x + dir2.y;
++    FfxBoolean zro  = dirR < FfxFloat32(1.0 / 32768.0);
++    dirR = ffxApproximateReciprocalSquareRoot(dirR);
++    dirR = zro ? FfxFloat32(1.0) : dirR;
++    dir.x = zro ? FfxFloat32(1.0) : dir.x;
++    dir *= ffxBroadcast2(dirR);
++
++    // Transform from {0 to 2} to {0 to 1} range, and shape with square.
++    len = len * FfxFloat32(0.5);
++    len *= len;
++
++    // Stretch kernel {1.0 vert|horz, to sqrt(2.0) on diagonal}.
++    FfxFloat32 stretch = (dir.x * dir.x + dir.y * dir.y) * ffxApproximateReciprocal(max(abs(dir.x), abs(dir.y)));
++
++    // Anisotropic length after rotation,
++    //  x := 1.0 lerp to 'stretch' on edges
++    //  y := 1.0 lerp to 2x on edges
++    FfxFloat32x2 len2 = FfxFloat32x2(FfxFloat32(1.0) + (stretch - FfxFloat32(1.0)) * len, FfxFloat32(1.0) + FfxFloat32(-0.5) * len);
++
++    // Based on the amount of 'edge',
++    // the window shifts from +/-{sqrt(2.0) to slightly beyond 2.0}.
++    FfxFloat32 lob = FfxFloat32(0.5) + FfxFloat32((1.0 / 4.0 - 0.04) - 0.5) * len;
++
++    // Set distance^2 clipping point to the end of the adjustable window.
++    FfxFloat32 clp = ffxApproximateReciprocal(lob);
++
++    // Accumulation mixed with min/max of 4 nearest.
++    //    b c
++    //  e f g h
++    //  i j k l
++    //    n o
++    FfxFloat32x3 min4 =
++        ffxMin(ffxMin3(FfxFloat32x3(ijfeR.z, ijfeG.z, ijfeB.z), FfxFloat32x3(klhgR.w, klhgG.w, klhgB.w), FfxFloat32x3(ijfeR.y, ijfeG.y, ijfeB.y)),
++               FfxFloat32x3(klhgR.x, klhgG.x, klhgB.x));
++    FfxFloat32x3 max4 =
++        max(ffxMax3(FfxFloat32x3(ijfeR.z, ijfeG.z, ijfeB.z), FfxFloat32x3(klhgR.w, klhgG.w, klhgB.w), FfxFloat32x3(ijfeR.y, ijfeG.y, ijfeB.y)), FfxFloat32x3(klhgR.x, klhgG.x, klhgB.x));
++
++    // Accumulation.
++    FfxFloat32x3 aC = ffxBroadcast3(0.0);
++    FfxFloat32  aW = FfxFloat32(0.0);
++    fsrEasuTapFloat(aC, aW, FfxFloat32x2(0.0, -1.0) - pp, dir, len2, lob, clp, FfxFloat32x3(bczzR.x, bczzG.x, bczzB.x));  // b
++    fsrEasuTapFloat(aC, aW, FfxFloat32x2(1.0, -1.0) - pp, dir, len2, lob, clp, FfxFloat32x3(bczzR.y, bczzG.y, bczzB.y));  // c
++    fsrEasuTapFloat(aC, aW, FfxFloat32x2(-1.0, 1.0) - pp, dir, len2, lob, clp, FfxFloat32x3(ijfeR.x, ijfeG.x, ijfeB.x));  // i
++    fsrEasuTapFloat(aC, aW, FfxFloat32x2(0.0, 1.0) - pp, dir, len2, lob, clp, FfxFloat32x3(ijfeR.y, ijfeG.y, ijfeB.y));   // j
++    fsrEasuTapFloat(aC, aW, FfxFloat32x2(0.0, 0.0) - pp, dir, len2, lob, clp, FfxFloat32x3(ijfeR.z, ijfeG.z, ijfeB.z));   // f
++    fsrEasuTapFloat(aC, aW, FfxFloat32x2(-1.0, 0.0) - pp, dir, len2, lob, clp, FfxFloat32x3(ijfeR.w, ijfeG.w, ijfeB.w));  // e
++    fsrEasuTapFloat(aC, aW, FfxFloat32x2(1.0, 1.0) - pp, dir, len2, lob, clp, FfxFloat32x3(klhgR.x, klhgG.x, klhgB.x));   // k
++    fsrEasuTapFloat(aC, aW, FfxFloat32x2(2.0, 1.0) - pp, dir, len2, lob, clp, FfxFloat32x3(klhgR.y, klhgG.y, klhgB.y));   // l
++    fsrEasuTapFloat(aC, aW, FfxFloat32x2(2.0, 0.0) - pp, dir, len2, lob, clp, FfxFloat32x3(klhgR.z, klhgG.z, klhgB.z));   // h
++    fsrEasuTapFloat(aC, aW, FfxFloat32x2(1.0, 0.0) - pp, dir, len2, lob, clp, FfxFloat32x3(klhgR.w, klhgG.w, klhgB.w));   // g
++    fsrEasuTapFloat(aC, aW, FfxFloat32x2(1.0, 2.0) - pp, dir, len2, lob, clp, FfxFloat32x3(zzonR.z, zzonG.z, zzonB.z));   // o
++    fsrEasuTapFloat(aC, aW, FfxFloat32x2(0.0, 2.0) - pp, dir, len2, lob, clp, FfxFloat32x3(zzonR.w, zzonG.w, zzonB.w));   // n
++
++    // Normalize and dering.
++    pix = ffxMin(max4, max(min4, aC * ffxBroadcast3(ffxReciprocal(aW))));
++}
++
++void main() {
++    vec3 c;
++    ffxFsrEasuFloat(c, uvec2(gl_FragCoord.xy), pc.con0, pc.con1, pc.con2, pc.con3);
++    outColor = vec4(c, 1.0);
++}
+diff --git a/src/hle/nvn/shaders/fsr1_rcas.frag b/src/hle/nvn/shaders/fsr1_rcas.frag
+new file mode 100644
+index 0000000..0982936
+--- /dev/null
++++ b/src/hle/nvn/shaders/fsr1_rcas.frag
+@@ -0,0 +1,124 @@
++// FidelityFX FSR 1 (EASU / RCAS), adapted from AMD's FidelityFX SDK 1.1.4 gpu/fsr1/ffx_fsr1.h, MIT license:
++// Copyright (C) 2024 Advanced Micro Devices, Inc. See third_party/fsr1/LICENSE.txt. Only the types and helper
++// functions the two filters use are defined here (the approximate reciprocals are exact ones).
++#version 450
++#define FfxFloat32 float
++#define FfxFloat32x2 vec2
++#define FfxFloat32x3 vec3
++#define FfxFloat32x4 vec4
++#define FfxUInt32x2 uvec2
++#define FfxUInt32x4 uvec4
++#define FfxInt32x2 ivec2
++#define FfxBoolean bool
++#define FFX_TRUE true
++#define FFX_FALSE false
++#define FFX_PARAMETER_IN in
++#define FFX_PARAMETER_OUT out
++#define FFX_PARAMETER_INOUT inout
++#define ffxAsFloat uintBitsToFloat
++#define ffxMin min
++#define ffxMin3(a, b, c) min(a, min(b, c))
++#define ffxMax3(a, b, c) max(a, max(b, c))
++#define ffxSaturate(x) clamp(x, 0.0, 1.0)
++#define ffxReciprocal(x) (1.0 / (x))
++#define ffxApproximateReciprocal(x) (1.0 / (x))
++#define ffxApproximateReciprocalMedium(x) (1.0 / (x))
++#define ffxApproximateReciprocalSquareRoot(x) inversesqrt(x)
++#define ffxBroadcast2(x) vec2(x)
++#define ffxBroadcast3(x) vec3(x)
++#define ffxBroadcast4(x) vec4(x)
++
++#define FSR_RCAS_LIMIT (0.25 - (1.0 / 16.0))
++layout(set = 0, binding = 0) uniform sampler2D uTex;
++layout(push_constant) uniform PC { uvec4 con; } pc;
++layout(location = 0) out vec4 outColor;
++vec4 FsrRcasLoadF(ivec2 p) { return texelFetch(uTex, clamp(p, ivec2(0), textureSize(uTex, 0) - ivec2(1)), 0); }
++void FsrRcasInputF(inout float r, inout float g, inout float b) {}
++ void FsrRcasF(out FfxFloat32 pixR, out FfxFloat32 pixG, out FfxFloat32 pixB, FfxUInt32x2 ip, FfxUInt32x4 con)
++ {  // Constant generated by RcasSetup().
++     // Algorithm uses minimal 3x3 pixel neighborhood.
++     //    b
++     //  d e f
++     //    h
++     FfxInt32x2   sp = FfxInt32x2(ip);
++     FfxFloat32x3 b  = FsrRcasLoadF(sp + FfxInt32x2(0, -1)).rgb;
++     FfxFloat32x3 d  = FsrRcasLoadF(sp + FfxInt32x2(-1, 0)).rgb;
++#ifdef FSR_RCAS_PASSTHROUGH_ALPHA
++     FfxFloat32x4 ee = FsrRcasLoadF(sp);
++     FfxFloat32x3 e  = ee.rgb;
++     pixA            = ee.a;
++#else
++     FfxFloat32x3 e = FsrRcasLoadF(sp).rgb;
++#endif
++     FfxFloat32x3 f = FsrRcasLoadF(sp + FfxInt32x2(1, 0)).rgb;
++     FfxFloat32x3 h = FsrRcasLoadF(sp + FfxInt32x2(0, 1)).rgb;
++     // Rename (32-bit) or regroup (16-bit).
++     FfxFloat32 bR = b.r;
++     FfxFloat32 bG = b.g;
++     FfxFloat32 bB = b.b;
++     FfxFloat32 dR = d.r;
++     FfxFloat32 dG = d.g;
++     FfxFloat32 dB = d.b;
++     FfxFloat32 eR = e.r;
++     FfxFloat32 eG = e.g;
++     FfxFloat32 eB = e.b;
++     FfxFloat32 fR = f.r;
++     FfxFloat32 fG = f.g;
++     FfxFloat32 fB = f.b;
++     FfxFloat32 hR = h.r;
++     FfxFloat32 hG = h.g;
++     FfxFloat32 hB = h.b;
++     // Run optional input transform.
++     FsrRcasInputF(bR, bG, bB);
++     FsrRcasInputF(dR, dG, dB);
++     FsrRcasInputF(eR, eG, eB);
++     FsrRcasInputF(fR, fG, fB);
++     FsrRcasInputF(hR, hG, hB);
++     // Luma times 2.
++     FfxFloat32 bL = bB * FfxFloat32(0.5) + (bR * FfxFloat32(0.5) + bG);
++     FfxFloat32 dL = dB * FfxFloat32(0.5) + (dR * FfxFloat32(0.5) + dG);
++     FfxFloat32 eL = eB * FfxFloat32(0.5) + (eR * FfxFloat32(0.5) + eG);
++     FfxFloat32 fL = fB * FfxFloat32(0.5) + (fR * FfxFloat32(0.5) + fG);
++     FfxFloat32 hL = hB * FfxFloat32(0.5) + (hR * FfxFloat32(0.5) + hG);
++     // Noise detection.
++     FfxFloat32 nz = FfxFloat32(0.25) * bL + FfxFloat32(0.25) * dL + FfxFloat32(0.25) * fL + FfxFloat32(0.25) * hL - eL;
++     nz            = ffxSaturate(abs(nz) * ffxApproximateReciprocalMedium(ffxMax3(ffxMax3(bL, dL, eL), fL, hL) - ffxMin3(ffxMin3(bL, dL, eL), fL, hL)));
++     nz            = FfxFloat32(-0.5) * nz + FfxFloat32(1.0);
++     // Min and max of ring.
++     FfxFloat32 mn4R = ffxMin(ffxMin3(bR, dR, fR), hR);
++     FfxFloat32 mn4G = ffxMin(ffxMin3(bG, dG, fG), hG);
++     FfxFloat32 mn4B = ffxMin(ffxMin3(bB, dB, fB), hB);
++     FfxFloat32 mx4R = max(ffxMax3(bR, dR, fR), hR);
++     FfxFloat32 mx4G = max(ffxMax3(bG, dG, fG), hG);
++     FfxFloat32 mx4B = max(ffxMax3(bB, dB, fB), hB);
++     // Immediate constants for peak range.
++     FfxFloat32x2 peakC = FfxFloat32x2(1.0, -1.0 * 4.0);
++     // Limiters, these need to be high precision RCPs.
++     FfxFloat32 hitMinR = mn4R * ffxReciprocal(FfxFloat32(4.0) * mx4R);
++     FfxFloat32 hitMinG = mn4G * ffxReciprocal(FfxFloat32(4.0) * mx4G);
++     FfxFloat32 hitMinB = mn4B * ffxReciprocal(FfxFloat32(4.0) * mx4B);
++     FfxFloat32 hitMaxR = (peakC.x - mx4R) * ffxReciprocal(FfxFloat32(4.0) * mn4R + peakC.y);
++     FfxFloat32 hitMaxG = (peakC.x - mx4G) * ffxReciprocal(FfxFloat32(4.0) * mn4G + peakC.y);
++     FfxFloat32 hitMaxB = (peakC.x - mx4B) * ffxReciprocal(FfxFloat32(4.0) * mn4B + peakC.y);
++     FfxFloat32 lobeR   = max(-hitMinR, hitMaxR);
++     FfxFloat32 lobeG   = max(-hitMinG, hitMaxG);
++     FfxFloat32 lobeB   = max(-hitMinB, hitMaxB);
++     FfxFloat32 lobe    = max(FfxFloat32(-FSR_RCAS_LIMIT), ffxMin(ffxMax3(lobeR, lobeG, lobeB), FfxFloat32(0.0))) * ffxAsFloat
++     (con.x);
++ // Apply noise removal.
++#ifdef FSR_RCAS_DENOISE
++     lobe *= nz;
++#endif
++     // Resolve, which needs the medium precision rcp approximation to avoid visible tonality changes.
++     FfxFloat32 rcpL = ffxApproximateReciprocalMedium(FfxFloat32(4.0) * lobe + FfxFloat32(1.0));
++     pixR            = (lobe * bR + lobe * dR + lobe * hR + lobe * fR + eR) * rcpL;
++     pixG            = (lobe * bG + lobe * dG + lobe * hG + lobe * fG + eG) * rcpL;
++     pixB            = (lobe * bB + lobe * dB + lobe * hB + lobe * fB + eB) * rcpL;
++     return;
++ }
++
++void main() {
++    float r, g, b;
++    FsrRcasF(r, g, b, uvec2(gl_FragCoord.xy), pc.con);
++    outColor = vec4(r, g, b, 1.0);
++}
+diff --git a/src/hle/nvn/vk_backend.cpp b/src/hle/nvn/vk_backend.cpp
+index 1302f3c..3969de8 100644
+--- a/src/hle/nvn/vk_backend.cpp
++++ b/src/hle/nvn/vk_backend.cpp
+@@ -46,6 +46,10 @@
+ #include "common/platform.h"
+ #include "hle/nvn/backend.h"
+ #include "hle/nvn/bc_decode.h"
++#include "hle/nvn/postfx_spv.h"
++#ifdef DSR_HAVE_FSR1
++#include "fsr1_spv.h"  // generated at build time from src/hle/nvn/shaders (cmake/build_fsr1_spv.cmake)
++#endif
+ #include "hle/nvn/etc_encode.h"
+ #include "hle/nvn/parallel.h"
+ #include "runtime/runtime.h"
+@@ -572,6 +576,7 @@ struct Image {
+     int clear_layer = 0, clear_level = 0;
+     uint64_t serial = 0;      // unique per created image (a background conversion finds its image again)
+     uint64_t upload_gen = 0;  // uploads so far (a conversion for an older upload is dropped)
++    bool presented = false;   // has been shown as the game's frame (Present): see sharp_hud
+ };
+ 
+ struct Shader {
+@@ -638,6 +643,7 @@ public:
+                     if (c.mask == 0 || c.index < 0 || c.index >= st_.num_rt) break;
+                     if (Image* img = GetImage(st_.rts[c.index], false)) {
+                         Begin();
++                        SharpWritten(img);
+                         const int layer = st_.rts[c.index].layer, level = st_.rts[c.index].level;
+                         if (!IsDepthFormat(img->nvn_format) && !capture_active_) {
+                             VkClearValue v{};
+@@ -1343,6 +1349,15 @@ public:
+             SetWindowFrameRate();
+         Image* src = tex.valid ? FindImage(tex) : nullptr;
+         if (src && !(src->written && !IsDepthFormat(src->nvn_format))) src = nullptr;
++        // sharp_hud: the frame shown is the sharp image (the HUD drawn into it, or at least the frame enlarged into
++        // it), every frame, so the swapchain keeps one size.
++        Image* sharp = nullptr;
++        if (src) {
++            src->presented = true;
++            if (sharp_w_ && src->width == sharp_rw_ && src->height == sharp_rh_) sharp = SharpImage(*src);
++        }
++        Image* const game_frame = src;
++        if (sharp) src = sharp;  // its size decides the swapchain's
+         // The swapchain is sized for the game's frame (see EnsureSwapchain): a frame of another size remakes it.
+         if (src && dsr::GetRuntime().config.compositor_scaling && (src->width != frame_w_ || src->height != frame_h_)) {
+             frame_w_ = src->width;
+@@ -1352,6 +1367,10 @@ public:
+         if (!EnsureSwapchain()) return;
+         // Acquire, copy and present run on the recorder after this frame's commands; the render thread goes on.
+         BeginCommands();
++        // sharp_hud: a frame whose HUD did not go into its sharp image (none drawn, or dropped) is enlarged into it
++        // now (recorded here: the command buffer above is where this frame's presentation goes).
++        if (sharp && !SharpActive(*game_frame)) SharpEnlarge(*game_frame, *sharp);
++        SharpFrameEnd();
+         PresentJob pj;
+         if (src) {
+             Transition(*src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+@@ -1612,6 +1631,26 @@ private:
+             LOGI(kTag, "aspect ratio: HUD and menus drawn in a centred %dx%d box of the %dx720 frame", hud_box_w_,
+                  hud_box_h_, rw);
+         }
++        // FXAA and FSR 1 work on the screen-sized image too (the 3D picture is enlarged into it), so either turns it on.
++        if (const dsr::RuntimeConfig& rc = dsr::GetRuntime().config; rc.sharp_hud || rc.fxaa || rc.fsr) {
++            const int rw = rc.render_width, rh = rc.render_height;
++            const bool postfx = rc.fxaa || rc.fsr;
++            const int target_h = std::max(std::min(rc.screen_height > 0 ? rc.screen_height : 1080, 1080), postfx ? rh : 0);
++            if (rc.render_scale >= 0.999f && !postfx) {
++                LOGI(kTag, "sharp_hud: off at a 100%% render resolution (only used below it)");
++            } else if (rw > 0 && rh > 0 && (target_h > rh || (postfx && target_h == rh))) {
++                sharp_rw_ = rw;
++                sharp_rh_ = rh;
++                sharp_h_ = target_h;
++                sharp_w_ = std::min(4096, int(std::lround(double(target_h) * rw / rh)) & ~1);
++                LOGI(kTag, "sharp_hud: the game renders at %dx%d, its HUD, menus and text are drawn at %dx%d%s%s",
++                     rw, rh, sharp_w_, sharp_h_, rc.fxaa ? (rc.fxaa >= 2 ? ", FXAA quality" : ", FXAA fast") : "",
++                     rc.fsr ? ", FSR 1" : "");
++            } else {
++                LOGI(kTag, "sharp_hud: off, the render size (%dx%d) is already as sharp as the screen allows (%d lines)", rw,
++                     rh, target_h);
++            }
++        }
+         if (en13.dynamicRendering && dsr::GetRuntime().config.render_pass_objects)
+             LOGI(kTag, "settings render_pass_objects = 1: render pass objects instead of the driver's dynamic rendering");
+         else if (en13.dynamicRendering) {
+@@ -3707,6 +3746,7 @@ private:
+     }
+     void ClearColorImage(Image& img, const uint32_t color[4], uint8_t kind, int layer = 0, int level = 0) {
+         if (IsDepthFormat(img.nvn_format)) return;
++        SharpWritten(&img);
+         Transition(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+         VkClearColorValue v;
+         memcpy(v.uint32, color, sizeof(v.uint32));  // float/int/uint share the bits
+@@ -3777,6 +3817,7 @@ private:
+ 
+     void CopyImage(Image& src, const CopyRegion& sr, Image& dst, const CopyRegion& dr, int flags) {
+         if (IsDepthFormat(src.nvn_format) != IsDepthFormat(dst.nvn_format)) return;
++        SharpWritten(&dst);
+         auto clampw = [](int v, int def) { return v > 0 ? v : def; };
+         int sw = clampw(sr.width, src.width), sh = clampw(sr.height, src.height);
+         int dw = clampw(dr.width, dst.width), dh = clampw(dr.height, dst.height);
+@@ -4762,6 +4803,62 @@ private:
+         // Keep enough streaming space for this draw so nothing allocated below is lost to a flush.
+         if (StreamRemaining() < (16ull << 20)) Flush();
+ 
++        // ---- sharp_hud: the HUD, menus and text into sharp images ---------------------------------------------------
++        // The game draws its HUD into a render-size image of its own (with the 3D frame already in it) and then copies
++        // that image into the frame it shows with one full-screen draw. Draws into a render-size image go into its
++        // sharp image (screen size) instead, from the first one this frame that is
++        // - a HUD / menu draw (blending, the game's 1280x720 2D projection), or
++        // - a draw that samples an image whose sharp image is in use this frame (that copy: it then reads the sharp
++        //   image, see the textures below);
++        // the image as drawn so far is enlarged into its sharp image first (SharpStart). Positions are scaled up
++        // (DynamicState below). A draw that needs the image's depth / stencil buffer (render size) cannot: the image
++        // then goes on at its own size this frame (its sharp image is dropped).
++        Image* sharp_src = nullptr;
++        if (sharp_w_ && !colors.empty() && colors[0] && colors[0]->width == sharp_rw_ && colors[0]->height == sharp_rh_ &&
++            colors[0]->type == VK_IMAGE_TYPE_2D) {
++            bool only = true;
++            for (size_t i = 1; i < colors.size(); i++) only = only && !colors[i];
++            const bool active = SharpActive(*colors[0]) != nullptr;
++            const char* why = active ? "in use" : nullptr;
++            if (!why && only && (st_.color.blend_enable & 1)) {
++                float sx, sy;
++                if (Projection2D(&sx, &sy) && std::fabs(sx - 2.0f / 1280.0f) < 1e-6f && std::fabs(sy + 2.0f / 720.0f) < 1e-6f)
++                    why = "a HUD draw";
++            }
++            if (!why && only && st_.program[1])
++                for (uint32_t slot = 0; slot < 32 && !why; slot++) {
++                    if (!((fs->info.texture_mask | fs->info.shadow_mask) >> slot & 1)) continue;
++                    BoundTexture bt = st_.textures[1][slot];
++                    if (!bt.valid) bt = HandleFromUniforms(1, slot);
++                    if (!bt.valid) continue;
++                    if (Image* t = FindImage(bt.texture); t && t != colors[0] && SharpActive(*t)) why = "a copy of a sharp image";
++                }
++            const bool needs_depth = depth && (st_.depth.depth_test || st_.depth.depth_write || st_.depth.stencil_test);
++            if (why && (!only || needs_depth)) {
++                if (active) {
++                    SharpWritten(colors[0]);
++                    sharp_dropped_++;
++                    LogOnce("sharp_drop", "sharp_hud: a draw into image %llu after its HUD started needs %s: it goes on at "
++                            "its own size this frame", (unsigned long long)colors[0]->serial,
++                            only ? "the depth / stencil buffer" : "more render targets");
++                }
++            } else if (why) {
++                // The final copy overwrites its target: what is there is only enlarged, without FXAA / FSR.
++                if (Image* sh = SharpStart(*colors[0], why[2] == 'H')) {
++                    if (!active && sharp_diag_ < 16 &&
++                        sharp_diag_keys_.insert(std::to_string(colors[0]->serial) + why).second) {
++                        sharp_diag_++;
++                        LOGI(kTag, "sharp_hud: image %llu (%s) goes into its sharp image from %s on", (unsigned long long)colors[0]->serial,
++                             colors[0]->presented ? "shown" : "not shown", why);
++                    }
++                    sharp_src = colors[0];
++                    colors[0] = sh;
++                    depth = nullptr;
++                    sharp_draws_++;
++                }
++            }
++        }
++
+         Phase(1);
+         // ---- textures (uploads and layout changes happen outside rendering) ---------------------------------
+         std::vector<TexWrite>& tex_writes = scratch_tex_writes_;  // members: no allocation per draw
+@@ -4798,6 +4895,13 @@ private:
+                     bt.texture.tex.swizzle[3] = 5;
+                     if (!img) return Skip("no stand-in texture");
+                 }
++                // sharp_hud: a draw going into a sharp image reads the sharp images of the images it samples.
++                bool sharp_tex = false;
++                if (sharp_src)
++                    if (Image* st = SharpActive(*img)) {
++                        img = st;
++                        sharp_tex = true;
++                    }
+                 for (Image* c : colors)
+                     if (c == img) return Skip("texture is also a render target");
+                 if (img != depth && IsDepthFormat(img->nvn_format) && (dsr::GetRuntime().config.hole_test & 16)) {
+@@ -4854,7 +4958,7 @@ private:
+                     draw_images_.push_back({int(stage), int(slot), img});
+                 }
+                 VkImageView view = SampledView(*img, info.texture_dim[slot], info.texture_array[slot], swz,
+-                                               bt.valid ? &bt.texture : nullptr);
++                                               bt.valid && !sharp_tex ? &bt.texture : nullptr);
+                 if (!view) {
+                     char k[160];
+                     snprintf(k, sizeof(k), "view: shader %s%d dim %d array %d | image type %d %dx%dx%d layers %d fmt %d",
+@@ -5246,17 +5350,19 @@ private:
+         d.layout = layout;
+         d.set_layouts[0] = vsl;
+         d.set_layouts[1] = fsl;
+-        DynamicState(extent, modes, &d.dyn);
++        // sharp_hud: viewport, scissor and HUD box worked out for the frame's own size, then scaled to the sharp image.
++        const VkExtent2D dyn_extent = sharp_src ? VkExtent2D{uint32_t(sharp_rw_), uint32_t(sharp_rh_)} : extent;
++        DynamicState(dyn_extent, modes, &d.dyn);
+         // Other aspect ratios (aspect_ratio): the game lays its HUD and menus out for 1280x720 and stretches that
+         // over the whole (wider or narrower) frame. Every draw made with that 1280x720 2D projection (several
+         // shaders: quads, text, bars) goes into a centred 16:9 box instead: 1280x720 in the middle of wider frames,
+         // the full width and 9/16 of it high on narrower ones, so the HUD keeps its shape and layout. Full-screen
+         // quads (fades, dimming behind menus) still cover the whole frame.
+-        if (hud_box_w_ && int(extent.height) == dsr::GetRuntime().config.render_height &&
+-            int(extent.width) == dsr::GetRuntime().config.render_width && HudBoxed(p, vin)) {
+-            const int fh = int(extent.height);
+-            const float sx = float(hud_box_w_) / float(extent.width), sy = float(hud_box_h_) / float(fh);
+-            const float x0 = float((int(extent.width) - hud_box_w_) / 2), y0 = float((fh - hud_box_h_) / 2);
++        if (hud_box_w_ && int(dyn_extent.height) == dsr::GetRuntime().config.render_height &&
++            int(dyn_extent.width) == dsr::GetRuntime().config.render_width && HudBoxed(p, vin)) {
++            const int fh = int(dyn_extent.height);
++            const float sx = float(hud_box_w_) / float(dyn_extent.width), sy = float(hud_box_h_) / float(fh);
++            const float x0 = float((int(dyn_extent.width) - hud_box_w_) / 2), y0 = float((fh - hud_box_h_) / 2);
+             d.dyn.vp.x = x0 + d.dyn.vp.x * sx;
+             d.dyn.vp.width *= sx;
+             d.dyn.vp.y = y0 + d.dyn.vp.y * sy;
+@@ -5285,6 +5391,19 @@ private:
+             sc.extent = {uint32_t(std::max(0, ir - il)), uint32_t(std::max(0, ib - it))};
+             hud_draws_boxed_++;
+         }
++        if (sharp_src) {
++            const float kx = float(extent.width) / float(sharp_rw_), ky = float(extent.height) / float(sharp_rh_);
++            d.dyn.vp.x *= kx;
++            d.dyn.vp.width *= kx;
++            d.dyn.vp.y *= ky;
++            d.dyn.vp.height *= ky;
++            VkRect2D& sc = d.dyn.sc;
++            const int l = int(std::floor(float(sc.offset.x) * kx)), t = int(std::floor(float(sc.offset.y) * ky));
++            const int r = std::min(int(extent.width), int(std::ceil(float(sc.offset.x + int(sc.extent.width)) * kx)));
++            const int b = std::min(int(extent.height), int(std::ceil(float(sc.offset.y + int(sc.extent.height)) * ky)));
++            sc.offset = {std::max(0, l), std::max(0, t)};
++            sc.extent = {uint32_t(std::max(0, r - sc.offset.x)), uint32_t(std::max(0, b - sc.offset.y))};
++        }
+         d.push[0] = st_.alpha_ref;
+         d.indexed = use_indices;
+         d.index_buf = fast ? index_buf : stream_;
+@@ -6660,6 +6779,11 @@ private:
+         fence_retries_ = 0;
+         gpu_busy_ms_ = 0;
+         stat_lists_ = list_counter_;
++        if (sharp_w_)
++            LOGI(kTag, "sharp_hud: last 10 s: %llu draws into the sharp image, %llu frames enlarged again after a clear / "
++                 "copy, %llu frames shown without (a later draw needed the frame's depth buffer)",
++                 (unsigned long long)sharp_draws_, (unsigned long long)sharp_restarts_, (unsigned long long)sharp_dropped_);
++        sharp_draws_ = sharp_restarts_ = sharp_dropped_ = 0;
+         prehash_used_ = prehash_inline_ = 0;
+         if (geo_buf_) {
+             LOGI(kTag, "geometry cache: %llu reused, %llu copied (%.1f MB), %llu volatile (streamed), %.0f of %llu MB used, "
+@@ -7072,6 +7196,424 @@ private:
+     uint64_t shadow_draws_skipped_ = 0;  // draws dropped from shadow map passes (lighting_off)
+     static bool layers_ok(const Image& d) { return d.layers <= 1 && d.depth <= 1; }
+     int hud_box_w_ = 0, hud_box_h_ = 0;
++    // ---- sharp_hud ------------------------------------------------------------------------------------------
++    // With a render scale the game draws its HUD, menus and text at the render size too (blurry once enlarged to the
++    // screen). Here they go into a "sharp" image the size of the screen (up to 1080 lines) instead: the game's frame
++    // (3D and post-processing, still at the render size) is enlarged into it when its first HUD draw comes (see
++    // Draw), and the sharp image is what is shown. One per frame image of the game (it shows 2-3 in turn).
++    int sharp_w_ = 0, sharp_h_ = 0;    // the sharp image's size; 0 = off
++    int sharp_rw_ = 0, sharp_rh_ = 0;  // the game's frame size
++    struct SharpEntry {
++        Image img;
++        bool active = false;   // this frame's draws into the source image go into img (cleared at each Present)
++        bool started = false;  // was active earlier this frame
++    };
++    std::unordered_map<uint64_t, SharpEntry> sharp_imgs_;  // by the source image's serial
++    uint64_t sharp_draws_ = 0, sharp_dropped_ = 0, sharp_restarts_ = 0;
++    int sharp_diag_ = 0;  // diagnostics: images that went sharp, logged so far
++    std::set<std::string> sharp_diag_keys_;
++    // The sharp image of src, if in use this frame.
++    Image* SharpActive(const Image& src) {
++        auto it = sharp_imgs_.find(src.serial);
++        return it != sharp_imgs_.end() && it->second.active ? &it->second.img : nullptr;
++    }
++    Image* SharpImage(const Image& src) {
++        auto it = sharp_imgs_.find(src.serial);
++        if (it != sharp_imgs_.end() && it->second.img.image && it->second.img.vk_format == src.vk_format)
++            return &it->second.img;
++        if (it != sharp_imgs_.end()) {
++            DestroyImage(it->second.img);
++            sharp_imgs_.erase(it);
++        }
++        constexpr VkFormatFeatureFlags kNeed = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
++                                               VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
++                                               VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
++        if ((src.features & kNeed) != kNeed || src.type != VK_IMAGE_TYPE_2D) {
++            LogOnce(("sharp_fmt" + std::to_string(src.nvn_format)).c_str(),
++                    "sharp_hud: images of format %d cannot be enlarged here (left at their own size)", src.nvn_format);
++            return nullptr;
++        }
++        // Images the game no longer has (re-created ones get a new serial): sharp images not in use go.
++        if (sharp_imgs_.size() >= 8)
++            for (auto i = sharp_imgs_.begin(); i != sharp_imgs_.end();) {
++                if (i->second.active) {
++                    ++i;
++                    continue;
++                }
++                DestroyImage(i->second.img);
++                i = sharp_imgs_.erase(i);
++            }
++        Image img;
++        img.nvn_format = src.nvn_format;
++        img.target = kTarget2D;
++        img.vk_format = src.vk_format;
++        img.twin = src.twin;
++        img.width = sharp_w_;
++        img.height = sharp_h_;
++        img.aspect = src.aspect;
++        img.features = src.features;
++        img.type = VK_IMAGE_TYPE_2D;
++        if (!AllocImage(img, false, src.mutable_fmt, &img.image, &img.memory)) {
++            sharp_w_ = 0;
++            return nullptr;
++        }
++        img.serial = ++image_serial_;
++        img.written = true;
++        LOGI(kTag, "sharp_hud: sharp image %dx%d for the game's %dx%d image %llu (format %d)", img.width, img.height,
++             src.width, src.height, (unsigned long long)src.serial, src.nvn_format);
++        SharpEntry& e = sharp_imgs_[src.serial];
++        e.img = img;
++        return &e.img;
++    }
++    // The sharp image for image src, in use from here on this frame: holding src as drawn so far (enlarged into it
++    // when it starts being used); null if there is none (sharp_hud off, or the format cannot be enlarged).
++    Image* SharpStart(Image& src, bool post = true) {
++        if (Image* a = SharpActive(src)) return a;
++        Image* sh = SharpImage(src);
++        if (!sh) return nullptr;
++        if (InOpenPass(&src) || InOpenPass(sh)) EndRendering();
++        SharpEnlarge(src, *sh, post);
++        SharpEntry& e = sharp_imgs_[src.serial];
++        if (e.started) sharp_restarts_++;  // the image changed after it went sharp this frame
++        e.active = e.started = true;
++        return sh;
++    }
++    // ---- post-processing of the enlarged 3D picture: FXAA 3.11 and FSR 1 (from pull request #47 by fernanfez00) ---
++    // When the 3D picture is enlarged into a sharp image (SharpEnlarge), FXAA (settings fxaa: 1 fast, 2 quality) runs
++    // on it at the render size first, and FSR 1 (settings fsr: EASU edge-adaptive upscaling, then RCAS sharpening)
++    // replaces the bilinear blit. Fragment passes over a full-screen triangle in render pass objects (every driver has
++    // them): no compute, no storage images. FXAA's SPIR-V is checked in (postfx_spv.h); FSR's is compiled from
++    // src/hle/nvn/shaders at build time (DSR_HAVE_FSR1; without glslc the build leaves FSR out).
++    enum PostKind { kPostFxaaFast, kPostFxaaQuality, kPostEasu, kPostRcas, kPostKinds };
++    struct PostPipe {
++        VkPipeline pipe = VK_NULL_HANDLE;
++        VkRenderPass rp = VK_NULL_HANDLE;
++        VkFormat fmt = VK_FORMAT_UNDEFINED;
++        int kind = 0;
++    };
++    struct PostJob {  // one pass, as queued for the recorder
++        VkPipeline pipe;
++        VkRenderPass rp;
++        VkFramebuffer fb;
++        VkImageView src_view;
++        uint32_t w, h, push_size;
++        uint32_t push[20];
++    };
++    VkShaderModule post_vs_ = VK_NULL_HANDLE, post_fsr_vs_ = VK_NULL_HANDLE, post_fs_[kPostKinds] = {};
++    VkDescriptorSetLayout post_set_layout_ = VK_NULL_HANDLE;
++    VkPipelineLayout post_layout_ = VK_NULL_HANDLE;
++    VkSampler post_sampler_ = VK_NULL_HANDLE;
++    std::vector<PostPipe> post_pipes_;
++    bool post_ready_ = false, post_failed_ = false, fsr_ready_ = false;
++    Image post_fxaa_img_;  // FXAA's output at the game's render size
++    Image post_fsr_tmp_;   // EASU's output (RCAS reads it)
++    uint64_t post_frames_ = 0;
++    static uint32_t FloatBits(float v) {
++        uint32_t u;
++        memcpy(&u, &v, sizeof(u));
++        return u;
++    }
++    // Linear-light formats (sRGB views and float formats sample as linear values): FXAA works in gamma 2.0 space.
++    static bool PostPerceptual(VkFormat f) {
++        switch (f) {
++            case VK_FORMAT_R8G8B8A8_SRGB: case VK_FORMAT_B8G8R8A8_SRGB: case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
++            case VK_FORMAT_R16G16B16A16_SFLOAT: case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
++            case VK_FORMAT_R32G32B32A32_SFLOAT:
++                return true;
++            default:
++                return false;
++        }
++    }
++    bool PostInit() {
++        if (post_ready_) return true;
++        if (post_failed_) return false;
++        post_failed_ = true;  // until everything below is made
++        if (props_.limits.maxPushConstantsSize < 80) {
++            LOGW(kTag, "post-processing off: push constants of %u bytes only", props_.limits.maxPushConstantsSize);
++            return false;
++        }
++        auto module = [&](const void* code, size_t bytes, VkShaderModule* out) {
++            VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
++            ci.codeSize = bytes;
++            ci.pCode = reinterpret_cast<const uint32_t*>(code);
++            return vkCreateShaderModule(device_, &ci, nullptr, out) == VK_SUCCESS;
++        };
++        namespace sp = postfx_spv;
++        if (!module(sp::kFullscreenVert, sp::kFullscreenVertSize, &post_vs_) ||
++            !module(sp::kFxaaFastFrag, sp::kFxaaFastFragSize, &post_fs_[kPostFxaaFast]) ||
++            !module(sp::kFxaaQualityFrag, sp::kFxaaQualityFragSize, &post_fs_[kPostFxaaQuality])) {
++            LOGW(kTag, "post-processing off: a shader module could not be made");
++            return false;
++        }
++#ifdef DSR_HAVE_FSR1
++        fsr_ready_ = module(kFsr1VertSpv, sizeof kFsr1VertSpv, &post_fsr_vs_) &&
++                     module(kFsr1EasuSpv, sizeof kFsr1EasuSpv, &post_fs_[kPostEasu]) &&
++                     module(kFsr1RcasSpv, sizeof kFsr1RcasSpv, &post_fs_[kPostRcas]);
++#endif
++        VkDescriptorSetLayoutBinding bind{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
++                                          nullptr};
++        VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
++        li.bindingCount = 1;
++        li.pBindings = &bind;
++        if (vkCreateDescriptorSetLayout(device_, &li, nullptr, &post_set_layout_) != VK_SUCCESS) return false;
++        VkPushConstantRange pr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 80};
++        VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
++        pl.setLayoutCount = 1;
++        pl.pSetLayouts = &post_set_layout_;
++        pl.pushConstantRangeCount = 1;
++        pl.pPushConstantRanges = &pr;
++        if (vkCreatePipelineLayout(device_, &pl, nullptr, &post_layout_) != VK_SUCCESS) return false;
++        VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
++        sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
++        sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
++        sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
++        sci.maxLod = 0.0f;
++        sci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
++        if (vkCreateSampler(device_, &sci, nullptr, &post_sampler_) != VK_SUCCESS) return false;
++        post_failed_ = false;
++        post_ready_ = true;
++        LOGI(kTag, "post-processing ready: FXAA fast / quality%s", fsr_ready_ ? ", FSR 1" : " (FSR 1 not in this build)");
++        return true;
++    }
++    // Whether the passes can work on `f` (sampled or drawn): a filterable, drawable plain 2D colour image.
++    bool PostFxUsable(const Image& f) {
++        if (!PostInit()) return false;
++        constexpr VkFormatFeatureFlags kNeed = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
++                                               VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
++                                               VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
++        return f.type == VK_IMAGE_TYPE_2D && f.levels == 1 && f.layers == 1 && f.aspect == VK_IMAGE_ASPECT_COLOR_BIT &&
++               (f.features & kNeed) == kNeed;
++    }
++    // An image like `f` at w x h in `slot`, made (again) when its size or format changed; retired like any image.
++    bool PostEnsureImage(Image& slot, const Image& f, int w, int h) {
++        if (slot.image && slot.width == w && slot.height == h && slot.vk_format == f.vk_format) return true;
++        if (slot.image) DestroyImage(slot);
++        Image n;
++        n.vk_format = f.vk_format;
++        n.nvn_format = f.nvn_format;
++        n.target = kTarget2D;
++        n.type = VK_IMAGE_TYPE_2D;
++        n.width = w;
++        n.height = h;
++        n.aspect = f.aspect;
++        n.features = f.features;
++        if (!AllocImage(n, false, false, &n.image, &n.memory)) return false;
++        n.serial = ++image_serial_;
++        slot = n;
++        LOGI(kTag, "post-processing image %dx%d (format %d)", w, h, int(slot.vk_format));
++        return true;
++    }
++    VkPipeline PostPipeline(int kind, VkFormat fmt, VkRenderPass* rp_out) {
++        for (const PostPipe& pp : post_pipes_)
++            if (pp.kind == kind && pp.fmt == fmt) {
++                *rp_out = pp.rp;
++                return pp.pipe;
++            }
++        if (!post_fs_[kind]) return VK_NULL_HANDLE;
++        const VkAttachmentLoadOp dont_care = VK_ATTACHMENT_LOAD_OP_DONT_CARE;  // every pass covers its whole target
++        VkRenderPass rp = MakeRenderPass(&fmt, 1, VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED, &dont_care,
++                                         VK_ATTACHMENT_LOAD_OP_LOAD);
++        if (!rp) return VK_NULL_HANDLE;
++        VkPipelineShaderStageCreateInfo stages[2]{};
++        stages[0].sType = stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
++        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
++        stages[0].module = kind == kPostEasu || kind == kPostRcas ? post_fsr_vs_ : post_vs_;
++        stages[0].pName = "main";
++        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
++        stages[1].module = post_fs_[kind];
++        stages[1].pName = "main";
++        VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
++        VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
++        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
++        VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
++        vp.viewportCount = vp.scissorCount = 1;
++        VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
++        rs.polygonMode = VK_POLYGON_MODE_FILL;
++        rs.cullMode = VK_CULL_MODE_NONE;
++        rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
++        rs.lineWidth = 1.0f;
++        VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
++        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
++        VkPipelineColorBlendAttachmentState att{};
++        att.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
++                             VK_COLOR_COMPONENT_A_BIT;
++        VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
++        cb.attachmentCount = 1;
++        cb.pAttachments = &att;
++        const VkDynamicState dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
++        VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
++        dy.dynamicStateCount = 2;
++        dy.pDynamicStates = dyn;
++        VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
++        ci.stageCount = 2;
++        ci.pStages = stages;
++        ci.pVertexInputState = &vi;
++        ci.pInputAssemblyState = &ia;
++        ci.pViewportState = &vp;
++        ci.pRasterizationState = &rs;
++        ci.pMultisampleState = &ms;
++        ci.pColorBlendState = &cb;
++        ci.pDynamicState = &dy;
++        ci.layout = post_layout_;
++        ci.renderPass = rp;
++        VkPipeline pipe = VK_NULL_HANDLE;
++        if (vkCreateGraphicsPipelines(device_, pipeline_cache_, 1, &ci, nullptr, &pipe) != VK_SUCCESS) {
++            LOGW(kTag, "post-processing pipeline %d (format %d) failed", kind, int(fmt));
++            pipe = VK_NULL_HANDLE;
++        }
++        post_pipes_.push_back({pipe, rp, fmt, kind});
++        *rp_out = rp;
++        return pipe;
++    }
++    VkFramebuffer PostFramebuffer(VkRenderPass rp, VkImageView view, uint32_t w, uint32_t h) {
++        // Cached like the draws' framebuffers (forgotten when the view is destroyed with its image: ReapRetired).
++        std::vector<uint64_t> key{reinterpret_cast<uint64_t>(rp), uint64_t(w) << 32 | h, reinterpret_cast<uint64_t>(view)};
++        {
++            std::lock_guard<std::mutex> lk(fb_mutex_);
++            auto it = fb_cache_.find(key);
++            if (it != fb_cache_.end()) return it->second;
++        }
++        VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
++        fi.renderPass = rp;
++        fi.attachmentCount = 1;
++        fi.pAttachments = &view;
++        fi.width = w;
++        fi.height = h;
++        fi.layers = 1;
++        VkFramebuffer fb = VK_NULL_HANDLE;
++        if (vkCreateFramebuffer(device_, &fi, nullptr, &fb) != VK_SUCCESS) return VK_NULL_HANDLE;
++        std::lock_guard<std::mutex> lk(fb_mutex_);
++        fb_cache_.emplace(std::move(key), fb);
++        return fb;
++    }
++    // Recorder thread: a descriptor set of post_set_layout_ from the slot's pool (a full pool continues in another).
++    bool AllocPostSet(VkDescriptorSet* set) {
++        VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
++        dai.descriptorSetCount = 1;
++        dai.pSetLayouts = &post_set_layout_;
++        for (int tries = 0; tries < 3; tries++) {
++            dai.descriptorPool = desc_pool_;
++            if (vkAllocateDescriptorSets(device_, &dai, set) == VK_SUCCESS) return true;
++            Slot& sl = slots_[rec_slot_];
++            if (sl.extra_used >= sl.extra_pools.size()) {
++                const VkDescriptorPool np = MakeDescriptorPool();
++                if (!np) return false;
++                sl.extra_pools.push_back(np);
++                desc_pools_added_++;
++            }
++            desc_pool_ = sl.extra_pools[sl.extra_used++];
++        }
++        return false;
++    }
++    // Recorder thread: one full-target pass sampling job.src_view.
++    void RecordPostPass(VkCommandBuffer cb, const PostJob& j) {
++        VkDescriptorSet set = VK_NULL_HANDLE;
++        if (!AllocPostSet(&set)) {
++            LogOnce("postfx_set", "post-processing: no descriptor set");
++            return;
++        }
++        VkDescriptorImageInfo ii{post_sampler_, j.src_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
++        VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
++        wr.dstSet = set;
++        wr.descriptorCount = 1;
++        wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
++        wr.pImageInfo = &ii;
++        vkUpdateDescriptorSets(device_, 1, &wr, 0, nullptr);
++        const VkRect2D area{{0, 0}, {j.w, j.h}};
++        VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
++        bi.renderPass = j.rp;
++        bi.framebuffer = j.fb;
++        bi.renderArea = area;
++        vkCmdBeginRenderPass(cb, &bi, VK_SUBPASS_CONTENTS_INLINE);
++        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, j.pipe);
++        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, post_layout_, 0, 1, &set, 0, nullptr);
++        vkCmdPushConstants(cb, post_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, j.push_size, j.push);
++        const VkViewport vp{0.0f, 0.0f, float(j.w), float(j.h), 0.0f, 1.0f};
++        vkCmdSetViewport(cb, 0, 1, &vp);
++        vkCmdSetScissor(cb, 0, 1, &area);
++        vkCmdDraw(cb, 3, 1, 0, 0);
++        vkCmdEndRenderPass(cb);
++        // The pass bound its own pipeline, sets, dynamic state and push constants: the draws' cached state is stale.
++        InvalidateBoundState();
++    }
++    // One pass: `src` (sampled) into `dst` (drawn), both whole. False (nothing recorded) when it cannot be done.
++    bool PostPass(int kind, Image& src, Image& dst, const uint32_t* push, uint32_t push_words) {
++        VkRenderPass rp = VK_NULL_HANDLE;
++        const VkPipeline pipe = PostPipeline(kind, dst.vk_format, &rp);
++        if (!pipe) return false;
++        static const uint8_t kIdentity[4] = {2, 3, 4, 5};
++        Transition(src, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
++        Transition(dst, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
++        const VkImageView sv = View(src, VK_IMAGE_VIEW_TYPE_2D, 0, 1, 1, src.aspect, kIdentity);
++        const VkImageView dv = AttachmentView(dst);
++        const VkFramebuffer fb = dv ? PostFramebuffer(rp, dv, uint32_t(dst.width), uint32_t(dst.height)) : VK_NULL_HANDLE;
++        if (!sv || !fb) return false;
++        PostJob j{};
++        j.pipe = pipe;
++        j.rp = rp;
++        j.fb = fb;
++        j.src_view = sv;
++        j.w = uint32_t(dst.width);
++        j.h = uint32_t(dst.height);
++        j.push_size = push_words * 4;
++        memcpy(j.push, push, push_words * 4);
++        Rec([this, j](VkCommandBuffer cb) { RecordPostPass(cb, j); });
++        dst.written = true;
++        // The next user of `dst` either samples it (a layout change: Transition's barrier) or draws into it in the same
++        // layout (the HUD), which needs a barrier first (BeginRendering).
++        dst.attach_unsynced = true;
++        return true;
++    }
++    // FXAA / FSR 1 for the 3D picture `src` enlarged into the sharp image `dst`; false: not done (the plain blit).
++    bool PostEnlarge(Image& src, Image& dst) {
++        const dsr::RuntimeConfig& c = dsr::GetRuntime().config;
++        if (!c.fxaa && !c.fsr) return false;
++        if (!PostFxUsable(src) || !PostFxUsable(dst)) {
++            LogOnce("postfx_fmt", "post-processing: the frame (format %d) cannot be filtered here: plain blit", src.nvn_format);
++            return false;
++        }
++        Image* in = &src;
++        if (c.fxaa && PostEnsureImage(post_fxaa_img_, src, src.width, src.height)) {
++            const uint32_t push[1] = {PostPerceptual(src.vk_format) ? 1u : 0u};
++            if (PostPass(c.fxaa >= 2 ? kPostFxaaQuality : kPostFxaaFast, src, post_fxaa_img_, push, 1)) in = &post_fxaa_img_;
++        }
++        bool done = false;
++        if (c.fsr && fsr_ready_ && PostEnsureImage(post_fsr_tmp_, dst, dst.width, dst.height)) {
++            // AMD's ffxFsrPopulateEasuConstants with the whole image as input; RCAS at 70% sharpness (PR #47's default).
++            const float iw = float(in->width), ih = float(in->height), ow = float(dst.width), oh = float(dst.height);
++            const uint32_t easu[16] = {FloatBits(iw / ow), FloatBits(ih / oh), FloatBits(0.5f * iw / ow - 0.5f),
++                                       FloatBits(0.5f * ih / oh - 0.5f), FloatBits(1.0f / iw), FloatBits(1.0f / ih),
++                                       FloatBits(1.0f / iw), FloatBits(-1.0f / ih), FloatBits(-1.0f / iw),
++                                       FloatBits(2.0f / ih), FloatBits(1.0f / iw), FloatBits(2.0f / ih), FloatBits(0.0f),
++                                       FloatBits(4.0f / ih), 0, 0};
++            const float stops = 2.0f * (1.0f - 0.70f);  // 0 stops = the sharpest
++            const uint32_t rcas[4] = {FloatBits(std::exp2(-stops)), 0, 0, 0};
++            done = PostPass(kPostEasu, *in, post_fsr_tmp_, easu, 16) && PostPass(kPostRcas, post_fsr_tmp_, dst, rcas, 4);
++        } else if (c.fsr && !fsr_ready_) {
++            LogOnce("fsr_missing", "fsr: FSR 1 is not available (not in this build, or its shaders failed): plain blit");
++        }
++        if (!done && in == &src) return false;  // nothing applied: the caller's blit
++        if (!done) SharpBlit(*in, dst);         // FXAA only: its result enlarged by the blit
++        if (post_frames_++ == 0)
++            LOGI(kTag, "post-processing active: %s%s, %dx%d -> %dx%d", in != &src ? (c.fxaa >= 2 ? "FXAA quality" : "FXAA fast") : "",
++                 done ? (in != &src ? " + FSR 1" : "FSR 1") : " + blit", src.width, src.height, dst.width, dst.height);
++        return true;
++    }
++    void SharpBlit(Image& from, Image& to) {
++        Transition(from, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
++        Transition(to, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
++        VkImageBlit b{};
++        b.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++        b.srcOffsets[1] = {from.width, from.height, 1};
++        b.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++        b.dstOffsets[1] = {to.width, to.height, 1};
++        Rec([b, si = from.image, di = to.image](VkCommandBuffer cb) {
++            vkCmdBlitImage(cb, si, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, di, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b,
++                           VK_FILTER_LINEAR);
++        });
++        barriers_ += 2;
++    }
++
+     std::unordered_set<uint64_t> hud_box_logged_;
+     uint64_t hud_full_screen_ = 0;
+     uint64_t hud_draws_boxed_ = 0;
+@@ -7331,6 +7873,35 @@ private:
+         sl.occ_keys.clear();
+     }
+ 
++    // A new frame: no sharp image in use.
++    void SharpFrameEnd() {
++        for (auto& [serial, e] : sharp_imgs_) e.active = e.started = false;
++    }
++    // post: the 3D picture is being enlarged (the HUD is about to be drawn on it, or none was): FXAA and FSR 1 apply.
++    void SharpEnlarge(Image& src, Image& dst, bool post = true) {
++        EndRendering();  // a blit or a pass cannot be recorded inside the open render pass
++        if (post && PostEnlarge(src, dst)) return;
++        Image* sh = &dst;
++        Transition(src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
++        Transition(*sh, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
++        VkImageBlit b{};
++        b.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++        b.srcOffsets[1] = {src.width, src.height, 1};
++        b.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++        b.dstOffsets[1] = {sh->width, sh->height, 1};
++        Rec([b, si = src.image, di = sh->image](VkCommandBuffer cb) {
++            vkCmdBlitImage(cb, si, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, di, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b,
++                           VK_FILTER_LINEAR);
++        });
++        barriers_ += 2;
++    }
++    // The game cleared or copied into image img: if this frame's HUD went into a sharp image, that is out of date
++    // (the next HUD draw enlarges the frame again).
++    void SharpWritten(const Image* img) {
++        if (!img) return;
++        auto it = sharp_imgs_.find(img->serial);
++        if (it != sharp_imgs_.end()) it->second.active = false;
++    }
+     struct Slot {
+         VkCommandBuffer cmd = VK_NULL_HANDLE;
+         VkFence fence = VK_NULL_HANDLE;
+diff --git a/src/platform/android/android_main.cpp b/src/platform/android/android_main.cpp
+index ff3af90..f3f3d5e 100644
+--- a/src/platform/android/android_main.cpp
++++ b/src/platform/android/android_main.cpp
+@@ -483,6 +483,9 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
+             else if (!strcmp(key, "max_anisotropy")) cfg->max_anisotropy = v;
+             else if (!strcmp(key, "geo_cache_mb")) cfg->geo_cache_mb = std::clamp(v, 32, 512);
+             else if (!strcmp(key, "anisotropy")) cfg->anisotropy = v < 0 ? -1 : std::min(v, 16);
++            else if (!strcmp(key, "sharp_hud")) cfg->sharp_hud = v != 0;
++            else if (!strcmp(key, "fxaa")) cfg->fxaa = std::clamp(v, 0, 2);
++            else if (!strcmp(key, "fsr")) cfg->fsr = v != 0;
+             else if (!strcmp(key, "shadow_compare")) cfg->shadow_compare = std::clamp(v, 0, 3);
+             else if (!strcmp(key, "game_hooks")) cfg->game_hooks = v != 0;
+             else if (!strcmp(key, "skip_intro")) cfg->skip_intro = v != 0;
+@@ -1391,6 +1394,7 @@ void StartGame(android_app* app) {
+         if (app->window) {
+             const int ww = ANativeWindow_getWidth(app->window), wh = ANativeWindow_getHeight(app->window);
+             if (ww > 0 && wh > 0) cfg.screen_aspect = float(std::max(ww, wh)) / float(std::min(ww, wh));
++            if (ww > 0 && wh > 0) cfg.screen_height = std::min(ww, wh);
+             LOGI(kTag, "screen %dx%d, aspect_ratio %s", ww, wh, cfg.aspect_ratio.c_str());
+         }
+         PrepareGpuDriver(app, st.base, &cfg);
+diff --git a/src/runtime/runtime.h b/src/runtime/runtime.h
+index 98fb303..fab0131 100644
+--- a/src/runtime/runtime.h
++++ b/src/runtime/runtime.h
+@@ -45,6 +45,15 @@ struct RuntimeConfig {
+     // screen_aspect) or "W:H". Experimental: widens the display resolution the game sets up (main+0x716170).
+     std::string aspect_ratio = "16:9";
+     float screen_aspect = 0;  // width / height of the screen (Android: the window), 0 = unknown
++    int screen_height = 0;    // the screen's shorter side in pixels (Android: the window), 0 = unknown
++    // sharp_hud: with a render scale, the HUD, menus and text drawn at the screen's resolution (up to
++    // 1080 lines) instead of the render size (vk_backend.cpp, SharpStart).
++    bool sharp_hud = false;
++    // Post-processing of the enlarged 3D picture (from pull request #47; turns the sharp-HUD image on by itself):
++    // fxaa 0 = off, 1 = FXAA 3.11 fast (for Mali), 2 = quality; fsr = FSR 1 upscaling (EASU + RCAS sharpening) instead
++    // of the bilinear enlargement.
++    int fxaa = 0;
++    bool fsr = false;
+     bool hud_box = true;      // other aspect ratios: keep the HUD and menus in a centred 16:9 box
+     int render_width = 1280;  // the game's render size once aspect_ratio and render_scale are applied
+     int render_height = 720;
+diff --git a/third_party/fsr1/LICENSE.txt b/third_party/fsr1/LICENSE.txt
+new file mode 100644
+index 0000000..a446efe
+--- /dev/null
++++ b/third_party/fsr1/LICENSE.txt
+@@ -0,0 +1,21 @@
++FidelityFX Super Resolution 1 (FSR 1), used by src/hle/nvn/shaders/fsr1_easu.frag and fsr1_rcas.frag.
++
++Copyright (C) 2024 Advanced Micro Devices, Inc.
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in
++all copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++THE SOFTWARE.
+diff --git a/tools/gen_postfx_shaders.py b/tools/gen_postfx_shaders.py
+new file mode 100644
+index 0000000..96c6c41
+--- /dev/null
++++ b/tools/gen_postfx_shaders.py
+@@ -0,0 +1,55 @@
++#!/usr/bin/env python3
++"""Compiles shaders/*.vert|*.frag (FXAA) to SPIR-V and writes src/hle/nvn/postfx_spv.h.
++
++Needs glslangValidator and spirv-val (Ubuntu: apt install glslang-tools spirv-tools). The header is checked in, so
++building the app needs neither: run this only after editing a shader.
++"""
++import os, struct, subprocess, sys, tempfile
++
++ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++SHADERS = [  # (array name, source, stage, defines)
++    ("kFullscreenVert", "fullscreen.vert", "vert", []),
++    ("kFxaaQualityFrag", "fxaa.frag", "frag", ["FXAA_STEPS=12"]),
++    ("kFxaaFastFrag", "fxaa.frag", "frag", ["FXAA_STEPS=6"]),
++]
++
++def compile_one(src, stage, defines, out):
++    cmd = ["glslangValidator", "-V", "--target-env", "vulkan1.1", "-S", stage,
++           "-I" + os.path.join(ROOT, "shaders")]
++    cmd += ["-D" + d for d in defines]
++    cmd += [os.path.join(ROOT, "shaders", src), "-o", out]
++    subprocess.check_call(cmd, stdout=subprocess.DEVNULL)
++    subprocess.check_call(["spirv-val", "--target-env", "vulkan1.1", out])
++
++def main():
++    lines = [
++        "// GENERATED by tools/gen_postfx_shaders.py from shaders/*: do not edit by hand.",
++        "// SPIR-V (Vulkan 1.1, capabilities Shader and ImageQuery only) of the post-processing passes",
++        "// (FXAA 3.11, ported from gu-native).",
++        "#pragma once",
++        "#include <cstddef>",
++        "#include <cstdint>",
++        "",
++        "namespace dsr::hle::nvn::postfx_spv {",
++        "",
++    ]
++    with tempfile.TemporaryDirectory() as tmp:
++        for name, src, stage, defines in SHADERS:
++            out = os.path.join(tmp, name + ".spv")
++            compile_one(src, stage, defines, out)
++            data = open(out, "rb").read()
++            words = struct.unpack("<%dI" % (len(data) // 4), data)
++            lines.append("// %s%s" % (src, (" (" + " ".join(defines) + ")") if defines else ""))
++            lines.append("inline constexpr uint32_t %s[] = {" % name)
++            for i in range(0, len(words), 8):
++                lines.append("    " + ", ".join("0x%08x" % w for w in words[i:i + 8]) + ",")
++            lines.append("};")
++            lines.append("inline constexpr size_t %sSize = sizeof(%s);" % (name, name))
++            lines.append("")
++    lines.append("}  // namespace dsr::hle::nvn::postfx_spv")
++    path = os.path.join(ROOT, "src", "hle", "nvn", "postfx_spv.h")
++    open(path, "w", newline="\n").write("\n".join(lines) + "\n")
++    print("wrote", path)
++
++if __name__ == "__main__":
++    sys.exit(main())
