@@ -14,6 +14,7 @@
 #include "hle/nvn/backend.h"
 #include "hle/nvn/state.h"
 #include "hle/nvn/layout.h"
+#include "hle/nvn/shadow_pass.h"
 #include "hle/nvn/shader/translator.h"
 #include "hle/registry.h"
 #include "loader/dynamic_thunks.h"
@@ -22,6 +23,7 @@
 
 static int g_failures = 0;
 #include "hle/nvn/etc_encode.h"
+#include "hle/nvn/astc_encode.h"
 #include "hle/nvn/parallel.h"
 #include "runtime/cheat_vm.h"
 
@@ -669,6 +671,127 @@ public:
 };
 }  // namespace
 
+// ASTC encoder tests from pull request #47 (fernanfez00).
+static void TestAstcEncode() {
+    using namespace dsr::hle::nvn;
+    CHECK(IsAstcEncodable(65) && IsAstcEncodable(72) && !IsAstcEncodable(73) && !IsAstcEncodable(77));
+    CHECK(AstcLevelBytes(37, 29, 1) == size_t(10) * 8 * 16 && AstcLevelBytes(1, 1, 1) == 16);
+    const int W = 37, H = 29;  // edges not on block boundaries
+    uint32_t seed = 11;
+    auto rnd = [&] { return (seed = seed * 1103515245u + 12345u) >> 16; };
+    // A BC1-like picture: every block has two colours (565-expanded) and texels at 0, 1/3, 2/3, 1 between them.
+    std::vector<uint8_t> pal(size_t(W) * H * 4);
+    for (int by = 0; by < (H + 3) / 4; by++)
+        for (int bx = 0; bx < (W + 3) / 4; bx++) {
+            int c0[3], c1[3];
+            for (int c = 0; c < 3; c++) {
+                const int a = int(rnd() & 31), b = int(rnd() & 31);
+                c0[c] = a << 3 | a >> 2;
+                c1[c] = b << 3 | b >> 2;
+            }
+            for (int y = 0; y < 4; y++)
+                for (int x = 0; x < 4; x++) {
+                    const int px = bx * 4 + x, py = by * 4 + y, i = int(rnd() & 3);
+                    if (px >= W || py >= H) continue;
+                    uint8_t* p = &pal[(size_t(py) * W + px) * 4];
+                    for (int c = 0; c < 3; c++)
+                        p[c] = uint8_t(i == 0 ? c0[c] : i == 3 ? c1[c] : i == 1 ? (2 * c0[c] + c1[c]) / 3 : (c0[c] + 2 * c1[c]) / 3);
+                    p[3] = 255;
+                }
+        }
+    // A smooth picture (as most art is) with a cut-out: texels of alpha 0 (black, as BC1 decodes them) in a pattern.
+    std::vector<uint8_t> cut(size_t(W) * H * 4);
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+            uint8_t* p = &cut[(size_t(y) * W + x) * 4];
+            const bool hole = (x / 3 + y / 5) % 3 == 0;
+            p[0] = hole ? 0 : uint8_t(x * 6 + rnd() % 9);
+            p[1] = hole ? 0 : uint8_t(y * 8 + rnd() % 9);
+            p[2] = hole ? 0 : uint8_t(((x ^ y) & 8) ? 220 : 30);
+            p[3] = hole ? 0 : 255;
+        }
+    for (int mode = 0; mode < 2; mode++) {
+        const std::vector<uint8_t>& img = mode ? cut : pal;
+        const int bxn = (W + 3) / 4, byn = (H + 3) / 4;
+        std::vector<uint8_t> out(AstcLevelBytes(W, H, 1));
+        EncodeAstc4x4(out.data(), img.data(), W, H, 1);
+        double se = 0;
+        long n = 0;
+        int alpha_wrong = 0;
+        bool understood = true;
+        for (int by = 0; by < byn; by++)
+            for (int bx = 0; bx < bxn; bx++) {
+                uint8_t d[16][4];
+                understood = understood && DecodeAstc4x4Block(&out[(size_t(by) * bxn + bx) * 16], d);
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) {
+                        const int sx = bx * 4 + x, sy = by * 4 + y;
+                        if (sx >= W || sy >= H) continue;
+                        const uint8_t* p = &img[(size_t(sy) * W + sx) * 4];
+                        const uint8_t* q = d[y * 4 + x];
+                        if ((p[3] >= 128) != (q[3] >= 128)) alpha_wrong++;
+                        if (p[3] >= 128)
+                            for (int c = 0; c < 3; c++) {
+                                const double e = double(q[c]) - p[c];
+                                se += e * e;
+                                n++;
+                            }
+                    }
+            }
+        CHECK(understood);
+        CHECK(alpha_wrong == 0);
+        CHECK(n > 0 && se / n < (mode ? 40.0 * 40.0 / 4 : 4.0 * 4.0));  // palettes: PSNR ~36 dB; noisy cut-out picture: ~28 dB
+    }
+}
+
+// ASTC 6x6 / 8x8 and BC5 as luminance + alpha (settings astc_block, bc5_astc): every block is one this file's decoder
+// understands, sizes are as many bytes as 16 per block, and the pictures come back close to the source.
+static void TestAstcBlockSizes() {
+    using namespace dsr::hle::nvn;
+    CHECK(AstcBlockDim(6) == 6 && AstcBlockDim(8) == 8 && AstcBlockDim(5) == 4 && AstcBlockDim(0) == 4);
+    CHECK(AstcLevelBytes(37, 29, 1, 6) == size_t(7) * 5 * 16 && AstcLevelBytes(37, 29, 1, 8) == size_t(5) * 4 * 16);
+    CHECK(IsAstcLaEncodable(75) && !IsAstcLaEncodable(76) && !IsAstcLaEncodable(73));
+    const int W = 61, H = 45;
+    std::vector<uint8_t> rgba(size_t(W) * H * 4), rg(size_t(W) * H * 2);
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+            uint8_t* p = &rgba[(size_t(y) * W + x) * 4];
+            p[0] = uint8_t(x * 4);
+            p[1] = uint8_t(y * 5);
+            p[2] = uint8_t(100 + ((x + y) & 7));
+            p[3] = 255;
+            rg[(size_t(y) * W + x) * 2] = uint8_t(128 + 100 * std::sin(x * 0.2) * std::cos(y * 0.15));
+            rg[(size_t(y) * W + x) * 2 + 1] = uint8_t(128 + 100 * std::cos(x * 0.1 + y * 0.12));
+        }
+    for (int bw : {4, 6, 8}) {
+        const int bxn = (W + bw - 1) / bw, byn = (H + bw - 1) / bw;
+        for (int la = 0; la < 2; la++) {
+            std::vector<uint8_t> out(AstcLevelBytes(W, H, 1, bw));
+            if (la) EncodeAstcLA(out.data(), rg.data(), W, H, 1, bw);
+            else EncodeAstc(out.data(), rgba.data(), W, H, 1, bw);
+            double se = 0, n = 0;
+            bool understood = true;
+            for (int by = 0; by < byn; by++)
+                for (int bx = 0; bx < bxn; bx++) {
+                    uint8_t d[64][4];
+                    understood = understood && DecodeAstcBlock(&out[(size_t(by) * bxn + bx) * 16], bw, d);
+                    for (int y = 0; y < bw; y++)
+                        for (int x = 0; x < bw; x++) {
+                            const int sx = bx * bw + x, sy = by * bw + y;
+                            if (sx >= W || sy >= H) continue;
+                            for (int c = 0; c < (la ? 2 : 3); c++) {
+                                const double e = double(d[y * bw + x][la ? (c ? 3 : 0) : c]) - (la ? rg[(size_t(sy) * W + sx) * 2 + c] : rgba[(size_t(sy) * W + sx) * 4 + c]);
+                                se += e * e;
+                                n++;
+                            }
+                        }
+                }
+            CHECK(understood);
+            CHECK(n > 0 && se / n < 20.0 * 20.0);  // smooth pictures: well above 22 dB even in 8x8 blocks
+        }
+    }
+}
+
 static void TestCheats() {
     using namespace dsr::cheats;
     const std::string file =
@@ -749,6 +872,76 @@ static void TestCheats() {
     CHECK(!Validate({0xE0000000}).empty());              // unknown type
 }
 
+// texture_quality: how many of the most detailed mip levels a texture loses.
+static void TestTextureQuality() {
+    using namespace dsr::hle::nvn;
+    auto tex = [](int w, int h) {
+        TextureState t;
+        t.width = w;
+        t.height = h;
+        return t;
+    };
+    // 100% (original) and textures without mips: nothing is left out.
+    CHECK(TextureMipSkip(tex(4096, 4096), 13, 100) == 0);
+    CHECK(TextureMipSkip(tex(2048, 2048), 1, 25) == 0);
+    // 50%: one level for textures whose smaller side stays >= 256 (512 and up).
+    CHECK(TextureMipSkip(tex(1024, 1024), 11, 50) == 1);
+    CHECK(TextureMipSkip(tex(512, 512), 10, 50) == 1);
+    CHECK(TextureMipSkip(tex(256, 256), 9, 50) == 0);
+    CHECK(TextureMipSkip(tex(2048, 256), 9, 50) == 0);
+    // 25%: two levels where the smaller side stays >= 256 (1024 and up), else one, else none.
+    CHECK(TextureMipSkip(tex(2048, 2048), 12, 25) == 2);
+    CHECK(TextureMipSkip(tex(1024, 1024), 11, 25) == 2);
+    CHECK(TextureMipSkip(tex(512, 512), 10, 25) == 1);
+    CHECK(TextureMipSkip(tex(2048, 512), 12, 25) == 1);
+    CHECK(TextureMipSkip(tex(256, 256), 9, 25) == 0);
+    // 75%: only the biggest textures (2048+ on a side), one level.
+    CHECK(TextureMipSkip(tex(4096, 4096), 13, 75) == 1);
+    CHECK(TextureMipSkip(tex(2048, 1024), 12, 75) == 1);
+    CHECK(TextureMipSkip(tex(1024, 1024), 11, 75) == 0);
+    // At least one level is always left.
+    CHECK(TextureMipSkip(tex(1024, 1024), 2, 25) == 1);
+    CHECK(TextureMipSkip(tex(1024, 1024), 1, 25) == 0);
+    // Values between the menu's steps round to the nearest; the result never grows as quality drops.
+    CHECK(TextureMipSkip(tex(2048, 2048), 12, 30) == 2);
+    CHECK(TextureMipSkip(tex(2048, 2048), 12, 40) == 1);
+    CHECK(TextureMipSkip(tex(2048, 2048), 12, 70) == 1);
+    for (int w : {256, 512, 1024, 2048, 4096})
+        for (int h : {256, 512, 1024, 2048, 4096})
+            for (int q = 100; q > 25; q -= 5)
+                CHECK(TextureMipSkip(tex(w, h), 13, q - 5) >= TextureMipSkip(tex(w, h), 13, q));
+    // The image that is left holds levels skip..n: its size matches the layout's level `skip`.
+    TextureState t = tex(2048, 2048);
+    t.format = 65;  // DXT1 (BC1)
+    t.levels = 12;
+    TextureLayout l = ComputeLayout(t);
+    const int skip = TextureMipSkip(t, t.levels, 25);
+    CHECK(skip == 2 && l.levels[size_t(skip)].width == 512 && l.levels[size_t(skip)].height == 512);
+}
+
+// lighting_off: which render passes are shadow maps.
+static void TestShadowPassDetection() {
+    using namespace dsr::hle::nvn;
+    // The shadow map: depth only (no pixel program, no colour target), square, power of two, 512..2048.
+    CHECK(IsShadowMapPass(2048, 2048, false, 0));
+    CHECK(IsShadowMapPass(1024, 1024, false, 0));
+    CHECK(IsShadowMapPass(512, 512, false, 0));
+    // Never a shadow map: a pixel program or a colour target is present (colour passes, half / quarter depth buffers).
+    CHECK(!IsShadowMapPass(2048, 2048, true, 0));
+    CHECK(!IsShadowMapPass(2048, 2048, false, 1));
+    CHECK(!IsShadowMapPass(1024, 1024, true, 3));
+    // Never a shadow map: the screen's depth prepass and its reduced copies are not square.
+    CHECK(!IsShadowMapPass(1280, 720, false, 0));
+    CHECK(!IsShadowMapPass(1920, 1080, false, 0));
+    CHECK(!IsShadowMapPass(640, 360, false, 0));
+    CHECK(!IsShadowMapPass(2048, 1024, false, 0));
+    // Outside the debug menu's range, or not a power of two.
+    CHECK(!IsShadowMapPass(256, 256, false, 0));
+    CHECK(!IsShadowMapPass(4096, 4096, false, 0));
+    CHECK(!IsShadowMapPass(720, 720, false, 0));
+    CHECK(!IsShadowMapPass(0, 0, false, 0));
+}
+
 int main() {
     struct T { const char* name; void (*fn)(); } tests[] = {
         {"lz4", TestLz4},
@@ -759,7 +952,11 @@ int main() {
         {"nvn_commands", TestNvnCommands},
         {"shader_translator", TestShaderTranslator},
         {"block_linear", TestBlockLinear},
+        {"texture_quality", TestTextureQuality},
+        {"shadow_pass", TestShadowPassDetection},
         {"etc_encode", TestEtcEncode},
+        {"astc_encode", TestAstcEncode},
+        {"astc_block_sizes", TestAstcBlockSizes},
         {"cheats", TestCheats},
 #if defined(__aarch64__)
         {"abi_arm64", TestAbi},

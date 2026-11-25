@@ -218,15 +218,34 @@ void ApplyPerformanceMode(Runtime& rt, const GameBuild& b) {
         done += done.empty() ? "low-quality effects" : ", low-quality effects";
     else
         LOGW("hooks", "performance mode: effects quality not changed (%s)", err.c_str());
-    int32_t* shadow = reinterpret_cast<int32_t*>(rt.main.base() + b.shadow_size);
-    if (rt.main.Contains(reinterpret_cast<uintptr_t>(shadow)) && *shadow == 2048) {
-        *shadow = 512;
-        done += done.empty() ? "shadow maps 512" : ", shadow maps 512";
-    } else {
-        LOGW("hooks", "performance mode: shadow map size not changed (found %d)",
-             rt.main.Contains(reinterpret_cast<uintptr_t>(shadow)) ? *shadow : -1);
+    if (rt.config.shadow_quality == 3) {  // shadow_quality 0-2 set their own size (ApplyShadowQuality)
+        int32_t* shadow = reinterpret_cast<int32_t*>(rt.main.base() + b.shadow_size);
+        if (rt.main.Contains(reinterpret_cast<uintptr_t>(shadow)) && *shadow == 2048) {
+            *shadow = 512;
+            done += done.empty() ? "shadow maps 512" : ", shadow maps 512";
+        } else {
+            LOGW("hooks", "performance mode: shadow map size not changed (found %d)",
+                 rt.main.Contains(reinterpret_cast<uintptr_t>(shadow)) ? *shadow : -1);
+        }
     }
     LOGI("hooks", "performance mode: %s", done.empty() ? "nothing applied" : done.c_str());
+}
+
+// Shadow quality (settings shadow_quality 0-2; from the 0.4.0 pull request #47): the shadow map size global the engine
+// sizes its shadow target from (see GameBuild::shadow_size) at 512 (0 and 1) or 1024 (2). With 0 the renderer also
+// leaves the shadow pass out and answers every lookup "lit" (vk_backend.cpp), so the small map only saves memory.
+void ApplyShadowQuality(Runtime& rt, const GameBuild& b) {
+    const int q = rt.config.shadow_quality;
+    if (q >= 3) return;
+    const int size = q == 2 ? 1024 : 512;
+    int32_t* shadow = reinterpret_cast<int32_t*>(rt.main.base() + b.shadow_size);
+    if (rt.main.Contains(reinterpret_cast<uintptr_t>(shadow)) && *shadow == 2048) {
+        *shadow = size;
+        LOGI("hooks", "shadow quality %d: shadow maps %dx%d%s", q, size, size, q == 0 ? ", shadows off" : "");
+    } else {
+        LOGW("hooks", "shadow quality: shadow map size not changed (found %d)%s",
+             rt.main.Contains(reinterpret_cast<uintptr_t>(shadow)) ? *shadow : -1, q == 0 ? "; shadows still off" : "");
+    }
 }
 
 // Lighter post-processing: no ambient occlusion, depth of field, camera motion blur or light shafts (see GameBuild).
@@ -259,6 +278,61 @@ void ApplyLighterPostFx(Runtime& rt, const GameBuild& b) {
             return;
         }
     LOGI("hooks", "lighter post-processing: no ambient occlusion, depth of field, camera motion blur or light shafts");
+}
+
+// Effect cluster overflow (a crash in the game itself). The render tasks draw a particle effect cluster
+// (FrpgFxClusterAppearance_Model.cpp) by writing each of its pieces into per-thread arrays with room for 384 (16, 4,
+// 4 and 64 bytes a piece at buffer+0x210, +0x1a10, +0x2010, +0x2610). The lock guarding the buffer lies right after
+// the last 64-byte slot (buffer+0x8618; 1.0.0 +0x8608). With more pieces the copy goes on past the end: piece 385's
+// matrix overwrites the lock, and unlocking it at the end of the function calls through that data (SIGSEGV on MTR_n,
+// pc main+0x624868 in DV 1.0.3; seen during a boss attack, with 390 pieces). The game does check the count, but only
+// to report "error !" (nothing in a release build), and 1.0.3 checks it against a limit at buffer+0x200 that is
+// larger than 384 (it let 390 through). The count is now clamped before the loop to 384 (1.0.3: and that limit),
+// in the register and in the stack copy the loop and the final draw read back: an oversized cluster shows its first
+// 384 pieces for that frame.
+struct FxClusterFix {
+    const char* build_id;
+    uint64_t at;
+    int n;
+    uint32_t from[9], to[9];
+};
+// 1.0.3: ldr w8,[x19,#0x200] / cmp w23,w8 / b.ls ok / adrp x0 / adrp x2 / add x0 / add x2 / mov w1,#444 / bl report
+//   ->   ldr w8,[x19,#0x200] / mov w9,#384 / cmp w8,w9 / csel w8,w8,w9,lo / cmp w23,w8 / csel w23,w23,w8,ls /
+//        str x23,[sp,#0x1e0] / nop / nop   (w9 is written again before it is next read)
+// 1.0.0 checks against 384 itself (cmp w23,#0x181); its report call (adrp x0 / adrp x2 / add x0, reached only when
+// the count is too large) -> mov w23,#384 / str x23,[sp,#0x308] / b past the report.
+#define FX103_TO {0xB9420268, 0x52803009, 0x6B09011F, 0x1A893108, 0x6B0802FF, 0x1A8892F7, 0xF900F3F7, kNop, kNop}
+const FxClusterFix kFxClusterFixes[] = {
+    {"5a797a3a", 0x628c5c, 3, {0xB0007C20, 0xB0007C22, 0x912BCC00}, {0x52803017, 0xF90187F7, 0x14000004}},
+    {"6569410c", 0x62398c, 9,
+     {0xB9420268, 0x6B0802FF, 0x540000E9, 0x90007BE0, 0x90007BE2, 0x9131D800, 0x91338C42, 0x52803781, 0x94057D00},
+     FX103_TO},
+    {"df3766a2", 0x62395c, 9,
+     {0xB9420268, 0x6B0802FF, 0x540000E9, 0xD0007C00, 0xD0007C02, 0x9133D800, 0x91358C42, 0x52803781, 0x94058339},
+     FX103_TO},
+};
+#undef FX103_TO
+
+void ApplyFxClusterFix(Runtime& rt) {
+    const FxClusterFix* f = nullptr;
+    for (const FxClusterFix& x : kFxClusterFixes)
+        if (rt.main_nso.build_id_hex.rfind(x.build_id, 0) == 0) f = &x;
+    if (!f) return;
+    for (int i = 0; i < f->n; ++i) {
+        const uint32_t* at = reinterpret_cast<const uint32_t*>(rt.main.base() + f->at + 4 * i);
+        if (!rt.main.Contains(reinterpret_cast<uintptr_t>(at)) || *at != f->from[i]) {
+            LOGW("hooks", "effect cluster fix not applied: main+0x%llx is not as expected",
+                 (unsigned long long)(f->at + 4 * i));
+            return;
+        }
+    }
+    std::string err;
+    for (int i = 0; i < f->n; ++i)
+        if (!rt.main.PatchInstruction(f->at + 4 * i, f->from[i], f->to[i], &err)) {
+            LOGW("hooks", "effect cluster fix: %s", err.c_str());
+            return;
+        }
+    LOGI("hooks", "effect cluster fix: effects with more than 384 pieces are drawn in part instead of overwriting memory");
 }
 
 void SkipIntroLogos(Runtime& rt, const GameBuild& b) {
@@ -672,17 +746,20 @@ void InstallGameHooks() {
             }
         }
     }
+    ApplyFxClusterFix(rt);
     if (rt.config.skip_intro) SkipIntroLogos(rt, b);
     // The experimental preset reuses only engine switches already identified and validated for this build.
     // It is deliberately not described as full lighting/shadow shutdown: shadow rendering remains active.
-    if (rt.config.lighting_lite) {
-        LOGI("hooks", "lighting_lite: applying verified reduced-effects preset");
+    // lighting_off adds the shadow-pass suppression of the Vulkan backend (not a game patch) to the same preset.
+    if (rt.config.lighting_lite || rt.config.lighting_off) {
+        LOGI("hooks", "%s: applying verified reduced-effects preset", rt.config.lighting_off ? "lighting_off" : "lighting_lite");
         ApplyPerformanceMode(rt, b);
         ApplyLighterPostFx(rt, b);
     } else {
         if (rt.config.performance_mode) ApplyPerformanceMode(rt, b);
         if (rt.config.lighter_post_fx) ApplyLighterPostFx(rt, b);
     }
+    ApplyShadowQuality(rt, b);
     {
         constexpr uint32_t kAdd2MiB = 0x11480108;  // add w8, w8, #0x200, lsl #12
         constexpr uint32_t kAdd8MiB = 0x11600108;  // add w8, w8, #0x800, lsl #12
