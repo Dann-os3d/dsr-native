@@ -37,7 +37,7 @@ Record whether black flashes occur in menus, exploration, transitions, or boss s
 - Driver: system.
 - FPS cap: 30 (stable pacing baseline; not a claim that the device sustains 30).
 - Present mode: FIFO.
-- Performance mode: enabled (the current menu applies 0.75 render scale and lower-cost effects; on devices without BC sampling it also enables mip skipping).
+- Performance mode: enabled (the current menu applies 0.75 render scale and lower-cost effects; on devices without BC sampling it also lowers the texture quality to 50%).
 - `render_pass_objects=1` for the diagnostic build/test only.
 - `mali_barriers=0` until the render-pass fallback has been tested independently.
 

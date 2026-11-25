@@ -45,6 +45,15 @@ struct RuntimeConfig {
     // screen_aspect) or "W:H". Experimental: widens the display resolution the game sets up (main+0x716170).
     std::string aspect_ratio = "16:9";
     float screen_aspect = 0;  // width / height of the screen (Android: the window), 0 = unknown
+    int screen_height = 0;    // the screen's shorter side in pixels (Android: the window), 0 = unknown
+    // sharp_hud: with a render scale, the HUD, menus and text drawn at the screen's resolution (up to
+    // 1080 lines) instead of the render size (vk_backend.cpp, SharpStart).
+    bool sharp_hud = false;
+    // Post-processing of the enlarged 3D picture (from pull request #47; turns the sharp-HUD image on by itself):
+    // fxaa 0 = off, 1 = FXAA 3.11 fast (for Mali), 2 = quality; fsr = FSR 1 upscaling (EASU + RCAS sharpening) instead
+    // of the bilinear enlargement.
+    int fxaa = 0;
+    bool fsr = false;
     bool hud_box = true;      // other aspect ratios: keep the HUD and menus in a centred 16:9 box
     int render_width = 1280;  // the game's render size once aspect_ratio and render_scale are applied
     int render_height = 720;
@@ -78,8 +87,15 @@ struct RuntimeConfig {
     // performance_mode = 1: the engine's own lower-quality options: low-quality effects, 1024x1024 shadow maps instead
     // of 2048x2048 (read at start-up). The menu also sets render_scale 0.75 when it is turned on.
     bool performance_mode = false;
-    // texture_mip_skip = 1: big BC textures (512x512 and up, with mip levels) are loaded without their most detailed
-    // level: half the width and height, ~75% less data to convert, upload and sample; softer up close.
+    // texture_quality (25..100, in %): resolution of the game's big BC textures (the art; never drawn into). Levels
+    // that are left out are never read, converted, uploaded or sampled, so this saves CPU time, GPU memory and
+    // bandwidth (not only looks). 100 = original. 75 = the biggest textures (2048+ on a side) lose their most
+    // detailed level. 50 = every big texture loses it: half the width and height, ~75% less data. 25 = the two most
+    // detailed levels: a quarter of the width and height, ~94% less data. A texture always keeps at least 256 texels
+    // on its smaller side, so small art stays sharp. Read at start-up.
+    int texture_quality = 100;
+    // texture_mip_skip = 1: the old on/off switch (= texture_quality 50). Only read when settings.txt has no
+    // texture_quality line (files from before the slider).
     int texture_mip_skip = 0;
     // pass_load_skip = 0: render passes always load their targets (by default a pass learned to overwrite a target
     // starts without loading it: vk_backend.cpp, PassCoverage).
@@ -99,13 +115,42 @@ struct RuntimeConfig {
     // lighting_lite = 1: experimental preset combining verified low-quality VFX, reduced shadow-map
     // resolution (512x512) and lighter post-processing. This does not disable every lighting or shadow pass.
     bool lighting_lite = false;
+    // lighting_off = 1 (experimental): no shadows and no light effects. Everything lighting_lite does (the engine's own
+    // switches: low-quality effects, no ambient occlusion / depth of field / motion blur / light shafts, 512 shadow
+    // maps), and the shadow passes are not drawn at all: a depth-only pass into a square power-of-two depth image of
+    // 512..2048 (the shadow map) is skipped before its render pass starts, and the shadow lookups always say "lit".
+    // The objects' own base lighting stays (it is part of their shaders; there is no verified switch for it).
+    bool lighting_off = false;
     // skip_intro = 1: the company logos at the start are skipped (straight to the title movie).
     bool skip_intro = false;
     int max_anisotropy = 0;  // limit on the game's anisotropic texture filtering (0 = the game's own level)
+    // anisotropy (settings menu "Anisotropic filtering"): -1 = as the game asks, 0 = off, 2 / 4 / 8 / 16 = that level on
+    // every mipmapped, linearly filtered texture (capped at the GPU's limit). Sharper textures at grazing angles
+    // (floors, walls, roads) for some GPU time.
+    int anisotropy = -1;
+    // geo_cache_mb (settings menu "Geometry cache"): size of the geometry cache (vertex / index data kept on the GPU
+    // across frames), 32-512 MB. Smaller uses less RAM but fills sooner (emptied and refilled: a short stall).
+    int geo_cache_mb = 192;
+    // shadow_quality: 0 = no shadows (the shadow map pass is not drawn, lookups say "lit"), 1 = 512, 2 = 1024,
+    // 3 = the game's 2048 (512 with performance_mode, as before).
+    int shadow_quality = 3;
+    // mali_tile_turbo (experimental, Mali GPUs only): image layout transitions scoped to the stages and accesses their
+    // layouts name, instead of waiting for / blocking all GPU work (vk_backend.cpp, LayoutScope).
+    bool mali_tile_turbo = false;
+    // skip_prepass (experimental, for Mali): the game's depth-only world pass is left out and the colour pass writes
+    // the depth instead (vk_backend.cpp, PrepassStat).
+    bool skip_prepass = false;
+    // skip_hidden (experimental): world draws that covered no pixel in recent frames (occlusion queries) are left
+    // out, retested every few frames (vk_backend.cpp, OccDecide). 1 = gentle (nothing left out while the camera moves),
+    // 2 = aggressive.
+    int skip_hidden = 0;
     bool fast_cores = true;  // keep the game's frame-critical threads off the efficiency cores
     bool record_thread = true;  // record Vulkan commands on a second thread (draw preparation stays on the render thread)
     bool pin_render_thread = false;  // keep the render thread on the fastest CPU core(s) (slower on 8 Gen 2: off)
     float exposure = 1.37f;       // scales the tone-mapping exposure (1.0 = as the game draws it)
+    // enemy_drops_100 = 1: every item an enemy (or any item lot) can drop always drops. A background thread sets
+    // lotItemBasePoint = 100 in the game's ItemLotParam in memory (runtime/enemy_drops.h). Nothing on disk changes.
+    bool enemy_drops_100 = false;
 };
 
 struct Runtime {

@@ -1,5 +1,6 @@
 #include "runtime/runtime.h"
 #include "runtime/cheats.h"
+#include "runtime/enemy_drops.h"
 
 #include <cxxabi.h>
 #include <pthread.h>
@@ -104,6 +105,7 @@ bool LoadGame(const RuntimeConfig& cfg, std::string* err) {
     }
     InstallGameHooks();
     if (!rt.config.dry_run) cheats::Start(rt.config.cheats_dir);
+    if (!rt.config.dry_run && rt.config.enemy_drops_100) StartEnemyDropsScan();
     return true;
 }
 
