@@ -50,6 +50,7 @@
 #include "hle/nvn/parallel.h"
 #include "runtime/runtime.h"
 #include "hle/nvn/layout.h"
+#include "hle/nvn/shadow_pass.h"
 #include "hle/os/os.h"
 #include "hle/nvn/shader/translator.h"
 #include "hle/nvn/state.h"
@@ -554,7 +555,8 @@ struct Image {
     // PassEndBarrier made this render target readable by fragment shaders only (mali_barriers); a vertex shader
     // that samples it needs one more barrier first (VertexReadBarrier).
     bool frag_only_sync = false;
-    // texture_mip_skip: the game's level 0 was left out (this image holds its levels 1..n as 0..n-1, at half size).
+    // texture_quality: how many of the game's most detailed levels were left out (this image holds the game's levels
+    // mip_skip..n as 0..n-mip_skip, each skipped level halving the width and height).
     int mip_skip = 0;
     // Depth written by a fragment shader (gl_FragDepth) since the image was last attached: see LrzTouch.
     bool depth_exported = false;
@@ -1328,6 +1330,14 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         if (!EnsureDevice()) return;
         ReportDraws();
+        occ_frame_++;
+        if (occ_still_ < 1000000) occ_still_++;  // OccCamera sets it back to 0 when the camera moves
+        // skip_hidden: keys of draws the game no longer issues (streamed geometry gets new addresses) go.
+        if (occ_state_.size() > 12000 && (occ_frame_ & 127) == 0)
+            for (auto it = occ_state_.begin(); it != occ_state_.end();) {
+                if (it->second.last_seen + 600 < occ_frame_) it = occ_state_.erase(it);
+                else ++it;
+            }
         // The frame rate cap changed while the game runs (settings menu): tell the display.
         if (window_ && swapchain_ && window_fps_ && window_fps_ != dsr::FixedFps(dsr::GetRuntime().config))
             SetWindowFrameRate();
@@ -1584,10 +1594,16 @@ private:
         LoadDeviceFunctions(device_);
         ProbePatchedBc();
         dsr::SetGpuHasBc(features_.textureCompressionBC || bc_forced_);
-        mip_skip_ = dsr::GetRuntime().config.texture_mip_skip > 0;
+        tex_quality_ = std::clamp(dsr::GetRuntime().config.texture_quality, 25, 100);
+        mip_skip_ = tex_quality_ < 100;
+        // shadow_quality 0 = no shadows: the same shadow-pass suppression as lighting_off, without its other effects.
+        lighting_off_ = dsr::GetRuntime().config.lighting_off || dsr::GetRuntime().config.shadow_quality == 0;
         load_skip_ = dsr::GetRuntime().config.pass_load_skip;
         ChooseStagingMemory();
-        if (mip_skip_) LOGI(kTag, "texture_mip_skip: big BC textures are loaded without their most detailed level");
+        if (lighting_off_) LOGI(kTag, "lighting_off: shadow map passes are not drawn and the shadow lookups say \"lit\"");
+        if (mip_skip_) LOGI(kTag, "texture_quality %d%%: big BC textures are loaded without their %s", tex_quality_,
+                            tex_quality_ <= 37 ? "two most detailed levels" : tex_quality_ <= 62 ? "most detailed level"
+                                                                                                 : "most detailed level (only the biggest ones)");
         if (const int rw = dsr::GetRuntime().config.render_width, rh = dsr::GetRuntime().config.render_height;
             (rw != 1280 || rh != 720) && rw > 0 && rh > 0 && dsr::GetRuntime().config.hud_box) {
             // The largest 16:9 box in the frame (the whole frame at 16:9, e.g. with a render scale).
@@ -1605,6 +1621,13 @@ private:
         mali_barriers_ = dsr::GetRuntime().config.mali_barriers;
         if (mali_barriers_)
             LOGI(kTag, "settings mali_barriers = 1: narrow layout barriers, render targets readable when their pass ends");
+        // mali_tile_turbo (experimental, Mali only; from PR #73 by Dann-os3d): see LayoutScope.
+        const bool is_mali = props_.vendorID == 0x13B5 || strstr(props_.deviceName, "Mali") != nullptr;
+        tile_turbo_ = dsr::GetRuntime().config.mali_tile_turbo && is_mali;
+        if (tile_turbo_)
+            LOGI(kTag, "settings mali_tile_turbo = 1: layout-scoped barriers (unknown layouts keep the full barrier)");
+        else if (dsr::GetRuntime().config.mali_tile_turbo)
+            LOGI(kTag, "settings mali_tile_turbo = 1 ignored: not a Mali GPU");
         if (!begin_rendering_ || !end_rendering_) {
             // Older drivers (Vulkan 1.1, e.g. Adreno 6xx on Android 10/11): render pass and framebuffer objects.
             begin_rendering_ = nullptr;
@@ -1638,6 +1661,12 @@ private:
                 qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
                 qi.queryCount = 2;
                 if (vkCreateQueryPool(device_, &qi, nullptr, &sl.ts) != VK_SUCCESS) sl.ts = VK_NULL_HANDLE;
+            }
+            if (dsr::GetRuntime().config.skip_hidden) {
+                VkQueryPoolCreateInfo oi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+                oi.queryType = VK_QUERY_TYPE_OCCLUSION;
+                oi.queryCount = kOccQueries;
+                if (vkCreateQueryPool(device_, &oi, nullptr, &sl.occ) != VK_SUCCESS) sl.occ = VK_NULL_HANDLE;
             }
             desc_pool_ = MakeDescriptorPool();
             if (!CreateStream() || !desc_pool_) return false;
@@ -1863,6 +1892,7 @@ private:
         if (!recording_) return;
         EndRendering();
         SubmitAndWait(VK_NULL_HANDLE, VK_NULL_HANDLE);
+        CollectOcclusion(slots_[slot_]);  // done on the GPU; the same slot's queries are reset by Begin
         recording_ = false;
         Begin();
         flushes_++;
@@ -2372,15 +2402,17 @@ private:
         img.height = t.tex.height;
         img.levels = std::max(1, std::min(t.tex.levels, int(layout.levels.size())));
         img.layers = std::max(1, layout.layers);
-        // texture_mip_skip: big BC textures (the game's art; never drawn into) without their most detailed level.
-        if (mip_skip_ && BcKindOf(t.tex.format) != BcKind::None && img.levels >= 2 && t.tex.width >= 512 &&
-            t.tex.height >= 512 && t.tex.target != kTarget3D && t.tex.target != kTarget1D &&
-            t.tex.target != kTarget1DArray) {
-            img.mip_skip = 1;
-            img.width = std::max(1, t.tex.width >> 1);
-            img.height = std::max(1, t.tex.height >> 1);
-            img.levels -= 1;
-            mip_skipped_++;
+        // texture_quality: big BC textures (the game's art; never drawn into) without their most detailed level(s).
+        if (mip_skip_ && BcKindOf(t.tex.format) != BcKind::None && t.tex.target != kTarget3D &&
+            t.tex.target != kTarget1D && t.tex.target != kTarget1DArray) {
+            const int skip = TextureMipSkip(t.tex, img.levels, tex_quality_);
+            if (skip > 0) {
+                img.mip_skip = skip;
+                img.width = std::max(1, t.tex.width >> skip);
+                img.height = std::max(1, t.tex.height >> skip);
+                img.levels -= skip;
+                mip_skipped_++;
+            }
         }
         img.depth = t.tex.target == kTarget3D ? std::max(1, t.tex.depth) : 1;
         img.aspect = AspectOf(t.tex.format);
@@ -2909,9 +2941,13 @@ private:
             default: type = array ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D; break;
         }
         // A texture view registered with the texture picks the first level/layer (and counts).
-        const uint32_t base_level = ref ? SubLevel(img, ref->level - img.mip_skip) : 0;  // mip_skip: one level less
+        const uint32_t base_level = ref ? SubLevel(img, ref->level - img.mip_skip) : 0;  // mip_skip: levels less
         uint32_t levels = uint32_t(img.levels) - base_level;
-        if (ref && ref->view_levels > 0) levels = std::min<uint32_t>(levels, uint32_t(ref->view_levels));
+        if (ref && ref->view_levels > 0) {
+            // A view that started in a skipped level has that many levels fewer here.
+            const int lost = std::max(0, img.mip_skip - ref->level);
+            levels = std::min<uint32_t>(levels, uint32_t(std::max(1, ref->view_levels - lost)));
+        }
         uint32_t base_layer = 0;
         if (ref && img.type != VK_IMAGE_TYPE_3D && dim != shader::TexDim::Cube) base_layer = SubLayer(img, ref->layer);
         if (array && dim != shader::TexDim::Cube) {
@@ -2964,7 +3000,19 @@ private:
         ci.mipLodBias = s.lod_bias;
         ci.minLod = std::max(0.0f, s.lod_min);
         ci.maxLod = (s.min_filter <= 1) ? 0.25f : std::max(ci.minLod, std::min(s.lod_max, 16.0f));
-        if (filterable && features_.samplerAnisotropy && s.max_anisotropy > 1.0f) {
+        // Settings anisotropy 0 / 2-16: the player's choice instead of the game's, on mipmapped linear samplers (the
+        // world's textures; the HUD's single-level ones and nearest-filtered lookups are left as they are).
+        const int aniso_force = dsr::GetRuntime().config.anisotropy;
+        const bool mipmapped_linear = ci.minFilter == VK_FILTER_LINEAR && s.min_filter >= 2 && ci.maxLod > 0.25f;
+        if (aniso_force >= 0 && filterable && !shadow && mipmapped_linear) {
+            if (aniso_force >= 2 && features_.samplerAnisotropy) {
+                ci.anisotropyEnable = VK_TRUE;
+                ci.maxAnisotropy = std::min(float(aniso_force), props_.limits.maxSamplerAnisotropy);
+            }
+            LogOnce(("anisoset" + std::to_string(int(s.max_anisotropy))).c_str(),
+                    "settings anisotropy %d: a sampler the game set to %.0fx uses %.0fx", aniso_force, s.max_anisotropy,
+                    ci.anisotropyEnable ? ci.maxAnisotropy : 1.0f);
+        } else if (filterable && features_.samplerAnisotropy && s.max_anisotropy > 1.0f) {
             ci.anisotropyEnable = VK_TRUE;
             ci.maxAnisotropy = std::min(s.max_anisotropy, props_.limits.maxSamplerAnisotropy);
             // `max_anisotropy` (settings): a lower limit than the game's, for slower GPUs (0 = the game's).
@@ -2986,6 +3034,8 @@ private:
                 case 3: ci.compareOp = VK_COMPARE_OP_NEVER; break;
                 default: break;
             }
+            // lighting_off: nothing is in shadow, whatever the (undrawn) shadow map holds.
+            if (lighting_off_) ci.compareOp = VK_COMPARE_OP_NEVER;
         }
         ci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
         VkSampler smp = VK_NULL_HANDLE;
@@ -3017,6 +3067,8 @@ private:
         uint32_t count = 0, instances = 0, first_vertex = 0, base_instance = 0;
         int32_t vertex_offset = 0;
         uint32_t query = UINT32_MAX;  // occlusion query index (captures)
+        VkQueryPool occ_pool = VK_NULL_HANDLE;  // skip_hidden: the slot's occlusion pool and query index
+        uint32_t occ_q = UINT32_MAX;
         uint16_t n_vb = 0, n_tex = 0, n_ubo = 0;
     };
     // ======================================================================================================
@@ -3252,6 +3304,7 @@ private:
             VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             vkBeginCommandBuffer(cmd_, &bi);
+            if (VkQueryPool occ = slots_[i].occ) vkCmdResetQueryPool(cmd_, occ, 0, kOccQueries);
             if (VkQueryPool ts = slots_[i].ts) {
                 vkCmdResetQueryPool(cmd_, ts, 0, 2);
                 vkCmdWriteTimestamp(cmd_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, ts, 0);
@@ -3439,6 +3492,7 @@ private:
             WaitSlotFence(sl);
             DeliverReadbacks(sl);
             CollectGpuTime(sl);
+            CollectOcclusion(sl);
             vkResetFences(device_, 1, &sl.fence);
             sl.pending = false;
             completed_seq_ = std::max(completed_seq_, sl.seq);  // one queue: earlier submissions are done too
@@ -3459,6 +3513,7 @@ private:
             if (sl.pending) {
                 DeliverReadbacks(sl);
                 CollectGpuTime(sl);
+                CollectOcclusion(sl);
                 vkResetFences(device_, 1, &sl.fence);
                 sl.pending = false;
             }
@@ -3485,21 +3540,79 @@ private:
     }
     bool mali_barriers_ = false;  // settings mali_barriers
     uint64_t vertex_read_barriers_ = 0;
+
+    // ---- mali_tile_turbo (experimental, Mali only; from PR #73 by Dann-os3d) --------------------------------------
+    // A layout transition normally waits for all earlier work (ALL_COMMANDS, any memory write) and blocks all later
+    // work. When both layouts say exactly how the image is used (attachment, copy, sampled), the barrier is scoped to
+    // those stages and accesses instead, so a tile-based GPU can keep unrelated work going across it. GENERAL and
+    // other layouts keep the full barrier. The pass-to-pass attachment barrier is likewise narrowed to the kinds of
+    // attachment (colour, depth) that have an unsynchronised write.
+    bool tile_turbo_ = false;
+    uint64_t turbo_scoped_ = 0, turbo_full_ = 0;
+    static bool LayoutScope(VkImageLayout layout, bool source, VkPipelineStageFlags* stages, VkAccessFlags* access) {
+        switch (layout) {
+            case VK_IMAGE_LAYOUT_UNDEFINED:  // contents discarded: nothing to wait for (only valid as the source)
+                if (!source) return false;
+                *stages = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+                *access = 0;
+                return true;
+            case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+                *stages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+                *access = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                return true;
+            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+                *stages = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+                *access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                return true;
+            case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+                *stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                *access = VK_ACCESS_TRANSFER_READ_BIT;
+                return true;
+            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+                *stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                *access = VK_ACCESS_TRANSFER_WRITE_BIT;
+                return true;
+            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:  // sampled by vertex / fragment shaders (no compute here)
+                *stages = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+                *access = VK_ACCESS_SHADER_READ_BIT;
+                return true;
+            default:
+                return false;
+        }
+    }
+
     void RawBarrier(VkImage image, VkImageAspectFlags aspect, VkImageLayout from, VkImageLayout to,
                     uint32_t levels = 1, uint32_t layers = 1) {
         barriers_++;
-        const VkPipelineStageFlags dst_stages = mali_barriers_ ? StagesUsing(to) : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        VkPipelineStageFlags src_stages = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        VkPipelineStageFlags dst_stages = mali_barriers_ ? StagesUsing(to) : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        VkAccessFlags src_access = VK_ACCESS_MEMORY_WRITE_BIT;
+        VkAccessFlags dst_access = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        if (tile_turbo_) {
+            VkPipelineStageFlags ss = 0, ds = 0;
+            VkAccessFlags sa = 0, da = 0;
+            if (LayoutScope(from, true, &ss, &sa) && LayoutScope(to, false, &ds, &da)) {
+                src_stages = ss;
+                dst_stages = ds;
+                src_access = sa;
+                dst_access = da;
+                turbo_scoped_++;
+            } else {
+                dst_stages = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+                turbo_full_++;
+            }
+        }
         VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        b.srcAccessMask = src_access;
+        b.dstAccessMask = dst_access;
         b.oldLayout = from;
         b.newLayout = to;
         b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.image = image;
         b.subresourceRange = {aspect, 0, levels, 0, layers};
-        Rec([b, dst_stages](VkCommandBuffer cb) {
-            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, dst_stages, 0, 0, nullptr, 0, nullptr, 1, &b);
+        Rec([b, src_stages, dst_stages](VkCommandBuffer cb) {
+            vkCmdPipelineBarrier(cb, src_stages, dst_stages, 0, 0, nullptr, 0, nullptr, 1, &b);
         });
     }
     void Transition(Image& img, VkImageLayout to) {
@@ -4569,6 +4682,82 @@ private:
             while (!colors.empty() && !colors.back()) colors.pop_back();
         if (depth && !IsDepthFormat(depth->nvn_format)) depth = nullptr;
 
+        // lighting_off: shadow maps are not drawn. The pass is dropped before its render pass starts (no depth
+        // load / store, no vertex work for the casters); the sampler says "lit" whatever the map holds.
+        if (lighting_off_ && depth && layers_ok(*depth) &&
+            IsShadowMapPass(depth->width, depth->height, st_.program[1] != nullptr,
+                            int(std::count_if(colors.begin(), colors.end(), [](const Image* c) { return c != nullptr; })))) {
+            if (shadow_draws_skipped_++ == 0)
+                LOGI(kTag, "lighting_off: first shadow map pass skipped (depth image %dx%d)", depth->width, depth->height);
+            depth->clear_pending = false;  // the game's per-frame clear of the map: nothing reads it, so it is not made
+            return;
+        }
+
+        // ---- skip_prepass (experimental, for Mali; from PR #47): see PrepassStat ------------------------------------
+        struct ForceDepthWrite {
+            bool* p = nullptr;
+            ~ForceDepthWrite() {
+                if (p) *p = false;
+            }
+        } force_depth_write;
+        if (dsr::GetRuntime().config.skip_prepass && depth && depth->width >= 256 && st_.depth.depth_test &&
+            !st_.depth.stencil_test && !shader_depth_test && (st_.depth.depth_func == 2 || st_.depth.depth_func == 4) &&
+            !(st_.program[1] && fs->info.writes_depth) && !capture_active_) {
+            bool any_color = false;
+            for (Image* c : colors) any_color |= c != nullptr;
+            const bool colour_writes = any_color && (st_.channel.mask & 0xF) != 0;
+            const bool depth_only = !colour_writes && st_.depth.depth_write;
+            const bool main_like = colour_writes && !st_.depth.depth_write && st_.color.blend_enable == 0;
+            if (depth_only || main_like) {
+                PrepassStat& ps = prepass_[depth->addr];
+                if (ps.frame != occ_frame_) {
+                    ps.learned = ps.pre >= 16 && ps.matched >= 16 && uint64_t(ps.matched) * 10 >= uint64_t(ps.pre) * 8;
+                    ps.frame = occ_frame_;
+                    ps.pre = ps.main = ps.matched = 0;
+                }
+                if (prepass_keys_frame_ != occ_frame_) {
+                    prepass_keys_.clear();
+                    prepass_keys_frame_ = occ_frame_;
+                }
+                const uint64_t pkey = PrepassKey(p, depth->addr);
+                if (depth_only) {
+                    ps.pre++;
+                    if (prepass_keys_.size() < 8192) prepass_keys_.insert(pkey);
+                    if (ps.learned) {
+                        prepass_skipped_++;
+                        return;
+                    }
+                } else {
+                    ps.main++;
+                    const bool twin = prepass_keys_.count(pkey) != 0;
+                    if (twin) ps.matched++;
+                    if (ps.learned) {
+                        if (twin) {
+                            st_.depth.depth_write = true;  // restored when this draw is done (ForceDepthWrite)
+                            force_depth_write.p = &st_.depth.depth_write;
+                            prepass_converted_++;
+                        } else {
+                            prepass_unmatched_++;
+                        }
+                    }
+                }
+            }
+        }
+        // ---- skip_hidden (experimental; from PR #47): world draws that covered no pixel lately are left out ----------
+        uint64_t occ_key = 0;
+        bool occ_query = false;
+        if (dsr::GetRuntime().config.skip_hidden && !capture_active_ && OccCandidate(p, colors, depth, shader_depth_test) &&
+            OccKey(p, vin, uint32_t(depth->width), &occ_key)) {
+            occ_judged_++;
+            if (!colors.empty() && colors[0] && occ_cam_frame_ != occ_frame_) OccCamera();
+            const int act = OccDecide(occ_key);
+            if (act == 2) {
+                occ_skipped_++;
+                return;
+            }
+            occ_query = act == 1;
+        }
+
         Begin();
         // Keep enough streaming space for this draw so nothing allocated below is lost to a flush.
         if (StreamRemaining() < (16ull << 20)) Flush();
@@ -5111,6 +5300,16 @@ private:
         for (const VkVertexInputBindingDescription& b : vin.bindings)
             instanced |= b.inputRate == VK_VERTEX_INPUT_RATE_INSTANCE;
         d.base_instance = instanced ? 0 : uint32_t(p.base_instance);
+        if (occ_query && recording_) {
+            Slot& osl = slots_[slot_];
+            if (osl.occ && osl.occ_used < kOccQueries) {
+                d.occ_pool = osl.occ;
+                d.occ_q = osl.occ_used++;
+                osl.occ_keys.push_back(occ_key);
+                occ_queried_++;
+            }
+        }
+        if (occ_query && d.occ_pool == VK_NULL_HANDLE) occ_state_[occ_key].veto = true;  // drawn without a query
         if (capture_active_ && query_pool_ && query_pass_.size() < kMaxQueries) {
             d.query = uint32_t(query_pass_.size());
             query_pass_.push_back(capture_pass_);
@@ -5461,6 +5660,7 @@ private:
         }
         ApplyDynamicState(d.dyn);
         if (d.query != UINT32_MAX) vkCmdBeginQuery(cb, query_pool_, d.query, 0);
+        if (d.occ_pool) vkCmdBeginQuery(cb, d.occ_pool, d.occ_q, 0);
         if (d.indexed) {
             if (bound_ib_.first != d.index_buf || bound_ib_.second != d.index_off || bound_ib_type_ != d.index_type) {
                 vkCmdBindIndexBuffer(cb, d.index_buf, d.index_off, d.index_type);
@@ -5472,6 +5672,7 @@ private:
             vkCmdDraw(cb, d.count, d.instances, d.first_vertex, d.base_instance);
         }
         if (d.query != UINT32_MAX) vkCmdEndQuery(cb, query_pool_, d.query);
+        if (d.occ_pool) vkCmdEndQuery(cb, d.occ_pool, d.occ_q);
     }
 
     // Viewport, scissor, blend constants and stencil values of the draw (render thread).
@@ -5919,7 +6120,7 @@ private:
     // when their content changed: small ranges (where per-frame data like particles and UI lives) are hashed in
     // full, large ones at 256 spots plus both ends. When the buffer fills up it is emptied (after the GPU is
     // done with it) and refilled.
-    static constexpr VkDeviceSize kGeoSize = 192ull << 20;
+    VkDeviceSize geo_size_ = 192ull << 20;  // settings geo_cache_mb (read when the cache is created)
     VkBuffer geo_buf_ = VK_NULL_HANDLE;
     VkDeviceMemory geo_mem_ = VK_NULL_HANDLE;
     uint8_t* geo_ptr_ = nullptr;
@@ -6042,7 +6243,8 @@ private:
         if (geo_buf_) return true;
         if (geo_failed_) return false;
         VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        bi.size = kGeoSize;
+        geo_size_ = VkDeviceSize(std::clamp(dsr::GetRuntime().config.geo_cache_mb, 32, 512)) << 20;
+        bi.size = geo_size_;
         bi.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
         VkMemoryRequirements req;
         VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
@@ -6053,9 +6255,9 @@ private:
         ai.memoryTypeIndex = StagingMemory(req.memoryTypeBits);
         if (vkAllocateMemory(device_, &ai, nullptr, &geo_mem_) != VK_SUCCESS) goto fail;
         vkBindBufferMemory(device_, geo_buf_, geo_mem_, 0);
-        if (vkMapMemory(device_, geo_mem_, 0, kGeoSize, 0, &p) != VK_SUCCESS) goto fail;
+        if (vkMapMemory(device_, geo_mem_, 0, geo_size_, 0, &p) != VK_SUCCESS) goto fail;
         geo_ptr_ = static_cast<uint8_t*>(p);
-        LOGI(kTag, "geometry cache: %llu MB", (unsigned long long)(kGeoSize >> 20));
+        LOGI(kTag, "geometry cache: %llu MB", (unsigned long long)(geo_size_ >> 20));
         return true;
     fail:
         LOGW(kTag, "geometry cache unavailable: vertex data is streamed every frame");
@@ -6148,7 +6350,7 @@ private:
             return VK_WHOLE_SIZE;
         }
         const VkDeviceSize need = (size + 63) & ~VkDeviceSize(63);
-        if (geo_off_ + need > kGeoSize) {
+        if (geo_off_ + need > geo_size_) {
             // Full: start over once the GPU no longer reads any of it.
             Flush();
             WaitGpuIdle();
@@ -6358,7 +6560,9 @@ private:
             }
             LOGI(kTag, "memory: process %ld MB resident, %zu GPU images using %llu MB, %zu index ranges cached%s", rss_kb / 1024,
                  images_.size(), (unsigned long long)(gpu >> 20), index_ranges_.size(),
-                 mip_skip_ ? (", " + std::to_string(mip_skipped_) + " big textures without their top level").c_str() : "");
+                 mip_skip_ ? (", " + std::to_string(mip_skipped_) + " big textures at " + std::to_string(tex_quality_) + "% quality").c_str() : "");
+            if (lighting_off_)
+                LOGI(kTag, "lighting_off: %llu shadow map draws skipped", (unsigned long long)shadow_draws_skipped_);
         }
         if (big_checks_) {
             LOGI(kTag, "game-written textures (>= 512x512): %llu checks, %llu changed and re-uploaded",
@@ -6380,6 +6584,23 @@ private:
         }
         LOGI(kTag, "last 10 s: %llu render passes started, %llu image barriers (%llu for vertex-shader reads of render targets)",
              (unsigned long long)render_passes_, (unsigned long long)barriers_, (unsigned long long)vertex_read_barriers_);
+        if (tile_turbo_)
+            LOGI(kTag, "mali_tile_turbo: %llu barriers scoped by layout, %llu kept full (other layouts)",
+                 (unsigned long long)turbo_scoped_, (unsigned long long)turbo_full_);
+        turbo_scoped_ = turbo_full_ = 0;
+        if (dsr::GetRuntime().config.skip_prepass)
+            LOGI(kTag, "skip_prepass: %llu depth-only draws left out, %llu colour draws writing the depth, %llu colour draws "
+                 "without a twin (unchanged), %zu depth buffers tracked (last 10 s)", (unsigned long long)prepass_skipped_,
+                 (unsigned long long)prepass_converted_, (unsigned long long)prepass_unmatched_, prepass_.size());
+        prepass_skipped_ = prepass_converted_ = prepass_unmatched_ = 0;
+        if (dsr::GetRuntime().config.skip_hidden)
+            LOGI(kTag, "skip_hidden %s: %llu draws judged, %llu left out, %llu drawn with a visibility query (%llu of them "
+                 "hidden ones while the camera moved), %llu kept until their retest's result, %llu came back into view, "
+                 "%zu draws tracked (last 10 s)", dsr::GetRuntime().config.skip_hidden == 1 ? "gentle" : "aggressive",
+                 (unsigned long long)occ_judged_, (unsigned long long)occ_skipped_, (unsigned long long)occ_queried_,
+                 (unsigned long long)occ_moving_frames_, (unsigned long long)occ_kept_, (unsigned long long)occ_woke_,
+                 occ_state_.size());
+        occ_judged_ = occ_skipped_ = occ_queried_ = occ_woke_ = occ_moving_frames_ = occ_kept_ = 0;
         vertex_read_barriers_ = 0;
         render_passes_ = barriers_ = 0;
         size_t rp_size = 0, fb_size = 0;
@@ -6443,7 +6664,7 @@ private:
         if (geo_buf_) {
             LOGI(kTag, "geometry cache: %llu reused, %llu copied (%.1f MB), %llu volatile (streamed), %.0f of %llu MB used, "
                  "%llu resets", (unsigned long long)geo_hits_, (unsigned long long)geo_misses_, geo_bytes_ / 1048576.0,
-                 (unsigned long long)geo_volatile_, geo_off_ / 1048576.0, (unsigned long long)(kGeoSize >> 20),
+                 (unsigned long long)geo_volatile_, geo_off_ / 1048576.0, (unsigned long long)(geo_size_ >> 20),
                  (unsigned long long)geo_resets_);
             geo_hits_ = geo_misses_ = geo_bytes_ = geo_volatile_ = 0;
         }
@@ -6844,8 +7065,12 @@ private:
         return !full;
     }
     bool bc_patched_ = false, bc_forced_ = false;
-    bool mip_skip_ = false;      // settings texture_mip_skip
-    uint64_t mip_skipped_ = 0;   // images created without their top level
+    bool mip_skip_ = false;      // settings texture_quality < 100
+    int tex_quality_ = 100;      // settings texture_quality (25..100 %)
+    uint64_t mip_skipped_ = 0;   // images created without their top level(s)
+    bool lighting_off_ = false;  // settings lighting_off
+    uint64_t shadow_draws_skipped_ = 0;  // draws dropped from shadow map passes (lighting_off)
+    static bool layers_ok(const Image& d) { return d.layers <= 1 && d.depth <= 1; }
     int hud_box_w_ = 0, hud_box_h_ = 0;
     std::unordered_set<uint64_t> hud_box_logged_;
     uint64_t hud_full_screen_ = 0;
@@ -6933,6 +7158,179 @@ private:
         int report = -1;       // 0: write the 32-bit `value`; 1: write a counter report {counter, timestamp}
         uint32_t value = 0;
     };
+    // ---- skip_prepass (experimental, for Mali; from PR #47) --------------------------------------------------------
+    // Frame captures: the world is drawn twice on the same depth buffer, first without colour (depth func LEQUAL,
+    // write on), then with colour (LEQUAL, write off), the same draws. On a tile-based GPU the second pass needs no
+    // prepass (hidden surface removal), so the first one only repeats the vertex work and the binning. A depth buffer
+    // that had >= 16 depth-only draws last frame, >= 80% of them matched by a colour draw of the same mesh, is treated
+    // this way this frame: its depth-only draws are left out and the matched colour draws write the depth. Colour
+    // draws without a twin (decals, sky, overlays) keep the game's state.
+    struct PrepassStat {
+        uint32_t frame = 0, pre = 0, main = 0, matched = 0;
+        bool learned = false;
+    };
+    std::unordered_map<uint64_t, PrepassStat> prepass_;
+    std::unordered_set<uint64_t> prepass_keys_;  // this frame's depth-only draws (mesh identity + depth buffer)
+    uint32_t prepass_keys_frame_ = ~0u;
+    uint64_t prepass_skipped_ = 0, prepass_converted_ = 0, prepass_unmatched_ = 0;
+    static uint64_t PrepassKey(const DrawParams& p, uint64_t depth_addr) {
+        uint64_t h = 1469598103934665603ull;
+        const auto mix = [&h](uint64_t v) {
+            h ^= v;
+            h *= 1099511628211ull;
+            h ^= h >> 29;
+        };
+        mix(depth_addr);
+        mix(p.index_address);
+        mix(uint64_t(p.count) | (uint64_t(p.index_type) << 40));
+        mix(uint64_t(int64_t(p.base_vertex)));
+        mix(uint64_t(uint32_t(p.mode)));
+        mix(uint64_t(int64_t(p.first)));
+        mix(uint64_t(uint32_t(p.instances)));
+        return h;
+    }
+
+    // ---- skip_hidden (experimental; from PR #47, its level 1) ------------------------------------------------------
+    // Frame captures (Mali-G57): most draws of the big world passes cover no pixel at all yet are still vertex-shaded
+    // and tiled. Draws of the world passes get an occlusion query; its result (read when the submission has finished)
+    // says whether the draw produced any sample. A draw that produced none twice running is left out, and is drawn
+    // again (with a query) every kOccRetest frames (staggered by key), so something that comes into view shows up a few
+    // frames late at most. A draw is recognised by its shaders, index data, vertex buffer and target width (not the
+    // object's constants, which change every frame while the camera moves: draws sharing a mesh share a key, and the
+    // key counts as hidden only when none of them produced a sample).
+    struct OccState {
+        uint32_t last_test = 0;  // frame of the last draw that had a query
+        uint32_t last_seen = 0;
+        uint8_t hidden = 0;      // consecutive tests with no samples
+        bool veto = false;       // a draw of this key was drawn without a query: its visibility is unknown
+        uint64_t test_seq = 0;   // gentle: the submission whose query result settles the last retest
+    };
+    static constexpr uint32_t kOccQueries = 2048;
+    static constexpr uint8_t kOccHiddenTests = 2;
+    static constexpr uint32_t kOccRetest = 3;
+    std::unordered_map<uint64_t, OccState> occ_state_;
+    uint32_t occ_frame_ = 0;
+    uint64_t occ_skipped_ = 0, occ_queried_ = 0, occ_judged_ = 0, occ_woke_ = 0;
+    std::vector<uint64_t> occ_results_;
+    std::unordered_map<uint64_t, bool> occ_agg_;
+    // Only opaque world geometry: indexed triangles (lists or strips), depth tested, into a depth target at least 256
+    // wide, no stencil, no blending, writing colour or depth. Everything else (the game's own visibility tests, effects)
+    // is always drawn.
+    bool OccCandidate(const DrawParams& p, const std::vector<Image*>& colors, const Image* depth, bool shader_depth_test) {
+        if (shader_depth_test || p.index_type < 0 || (p.mode != 4 && p.mode != 5) || p.count < 3) return false;
+        if (!depth || depth->width < 256 || !st_.depth.depth_test || st_.depth.stencil_test) return false;
+        if (st_.color.blend_enable != 0) return false;
+        return st_.depth.depth_write || (!colors.empty() && colors[0] && (st_.channel.mask & 0xF) != 0);
+    }
+    bool OccKey(const DrawParams& p, const VertexInput& vin, uint32_t target_w, uint64_t* out) {
+        if (!st_.program[0] || vin.bindings.empty()) return false;
+        uint64_t h = 1469598103934665603ull;
+        const auto mix = [&h](uint64_t v) {
+            h ^= v;
+            h *= 1099511628211ull;
+            h ^= h >> 29;
+        };
+        mix(st_.program[0]->hash);
+        mix(st_.program[1] ? st_.program[1]->hash : 0);
+        mix(uint64_t(p.count) | (uint64_t(p.index_type) << 40) | (uint64_t(st_.depth.depth_write) << 48));
+        mix(p.index_address);
+        mix(uint64_t(int64_t(p.base_vertex)));
+        mix(uint64_t(uint32_t(p.mode)));
+        mix(st_.vertex_buffers[vin.bindings[0].binding].address);
+        mix(uint64_t(target_w));
+        *out = h;
+        return true;
+    }
+    // skip_hidden 1 (gentle, the default): what popped in while the camera turns was geometry at the screen's edges,
+    // hidden only because it was off screen, whose retest came 3 frames later and its result 2 more. Now:
+    // - while the camera moves (its matrix, the first 64 bytes of a world draw's vertex constants, changed this
+    //   frame or in the last kOccStillFrames frames) nothing is left out: every draw is drawn, with a query;
+    // - a draw needs kOccGentleTests empty results in a row (not 2) before it is left out;
+    // - a retested draw stays drawn (without a query) until its result is in, so it never blinks in for a frame.
+    // skip_hidden 2 (aggressive) is the first version: more saving, more pop-in.
+    static constexpr uint8_t kOccGentleTests = 4;
+    static constexpr uint32_t kOccGentleRetest = 4;
+    static constexpr uint32_t kOccStillFrames = 8;
+    float occ_cam_[16] = {};
+    uint32_t occ_cam_frame_ = ~0u;  // frame of the last camera sample
+    uint32_t occ_still_ = 0;        // frames the camera has not moved
+    uint64_t occ_moving_frames_ = 0, occ_kept_ = 0;
+    // The camera of this frame's first world draw with a colour target: moved since the last sample?
+    void OccCamera() {
+        occ_cam_frame_ = occ_frame_;
+        const BufferRange& c3 = st_.uniforms[0][0];
+        if (!c3.address || c3.size < 64 || !GuestRangeValid(c3.address, 64)) return;
+        float m[16];
+        memcpy(m, reinterpret_cast<const void*>(c3.address), sizeof(m));
+        bool moved = false;
+        for (int i = 0; i < 16 && !moved; i++) {
+            const float d = std::fabs(m[i] - occ_cam_[i]);
+            moved = !(d <= 1e-4f * std::max(1.0f, std::fabs(m[i])));  // (NaN counts as moved)
+        }
+        memcpy(occ_cam_, m, sizeof(m));
+        if (moved) occ_still_ = 0;
+    }
+    // 0: draw, 1: draw with a query, 2: leave out.
+    int OccDecide(uint64_t key) {
+        if (occ_state_.size() > 40000) occ_state_.clear();  // keys that never repeat: start over
+        OccState& s = occ_state_[key];
+        s.last_seen = occ_frame_;
+        const bool gentle = dsr::GetRuntime().config.skip_hidden == 1;
+        if (s.hidden >= (gentle ? kOccGentleTests : kOccHiddenTests)) {
+            if (s.last_test == occ_frame_) return 1;  // every draw of this key on its retest frame
+            if (gentle && occ_still_ < kOccStillFrames) {  // the camera moves: drawn, and tested again
+                s.last_test = occ_frame_;
+                s.test_seq = submit_seq_ + 1;
+                occ_moving_frames_++;
+                return 1;
+            }
+            if (gentle && s.test_seq > completed_seq_) {  // its retest's result is not in yet: stays drawn
+                occ_kept_++;
+                return 0;
+            }
+            // Retests staggered by key, so the hidden geometry does not all come back on the same frame.
+            const uint32_t retest = gentle ? kOccGentleRetest : kOccRetest;
+            const uint32_t since = occ_frame_ - s.last_test;
+            if (since < retest || (occ_frame_ + uint32_t(key >> 7)) % retest != 0) return 2;
+            s.test_seq = submit_seq_ + 1;
+        }
+        s.last_test = occ_frame_;
+        return 1;
+    }
+    // The results of a finished submission's queries (its fence has signalled): render thread.
+    void CollectOcclusion(Slot& sl) {
+        const uint32_t n = std::min<uint32_t>(sl.occ_used, uint32_t(sl.occ_keys.size()));
+        sl.occ_used = 0;
+        if (!sl.occ || !n) {
+            sl.occ_keys.clear();
+            return;
+        }
+        std::vector<uint64_t>& res = occ_results_;
+        res.assign(size_t(n) * 2, 0);
+        const VkResult r = vkGetQueryPoolResults(device_, sl.occ, 0, n, res.size() * 8, res.data(), 16,
+                                                 VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+        if (r == VK_SUCCESS || r == VK_NOT_READY) {
+            occ_agg_.clear();
+            for (uint32_t i = 0; i < n; i++) {
+                if (!res[size_t(i) * 2 + 1]) continue;  // never ran (the draw was dropped later)
+                bool& vis = occ_agg_[sl.occ_keys[i]];
+                vis = vis || res[size_t(i) * 2] != 0;
+            }
+            for (const auto& kv : occ_agg_) {
+                auto it = occ_state_.find(kv.first);
+                if (it == occ_state_.end()) continue;
+                if (kv.second || it->second.veto) {
+                    if (kv.second && it->second.hidden >= kOccHiddenTests) occ_woke_++;
+                    it->second.hidden = 0;
+                    it->second.veto = false;
+                } else if (it->second.hidden < 255) {
+                    it->second.hidden++;
+                }
+            }
+        }
+        sl.occ_keys.clear();
+    }
+
     struct Slot {
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
@@ -6940,6 +7338,9 @@ private:
         std::vector<Readback> readbacks;
         VkQueryPool ts = VK_NULL_HANDLE;  // GPU time of the submission (start, end)
         bool ts_written = false;
+        VkQueryPool occ = VK_NULL_HANDLE;  // skip_hidden: occlusion queries of the submission's draws
+        uint32_t occ_used = 0;
+        std::vector<uint64_t> occ_keys;    // the draw key of each query
         VkDescriptorPool pool = VK_NULL_HANDLE;
         std::vector<VkDescriptorPool> extra_pools;  // when `pool` fills up (recorder thread)
         std::vector<VkFramebuffer> framebuffers;    // render pass fallback: destroyed when the slot is reused

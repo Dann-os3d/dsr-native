@@ -384,6 +384,20 @@ bool SaveSetting(const std::string& path, const std::string& key, const std::str
     return ok;
 }
 
+// The game_language line of settings.txt (the Language tab's "game language"): a language code, or "" for the same
+// language as the menu (no line, or "auto").
+std::string GameLanguageSetting(const std::string& path) {
+    std::string out;
+    if (FILE* f = fopen(path.c_str(), "r")) {
+        char line[256], key[64], value[64];
+        while (fgets(line, sizeof(line), f))
+            if (line[0] != '#' && sscanf(line, " %63[a-z_0-9] = %63s", key, value) == 2 && !strcmp(key, "game_language"))
+                out = value;
+        fclose(f);
+    }
+    return out == "auto" ? std::string() : out;
+}
+
 // settings.txt beside the game folder: "key = value" lines, '#' comments. Written with defaults if missing.
 void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
     FILE* f = fopen(path.c_str(), "r");
@@ -441,7 +455,7 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
         }
     } else {
         bool have_present_mode = false, have_face_buttons = false, have_gpu_driver = false, have_bc_enabler = false;
-        bool have_touch = false, have_aspect = false;
+        bool have_touch = false, have_aspect = false, have_texture_quality = false;
         int settings_version = 1;
         char line[256];
         while (fgets(line, sizeof(line), f)) {
@@ -467,9 +481,15 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
             else if (!strcmp(key, "hud_box")) cfg->hud_box = v != 0;
             else if (!strcmp(key, "compositor_scaling")) cfg->compositor_scaling = v != 0;
             else if (!strcmp(key, "max_anisotropy")) cfg->max_anisotropy = v;
+            else if (!strcmp(key, "geo_cache_mb")) cfg->geo_cache_mb = std::clamp(v, 32, 512);
+            else if (!strcmp(key, "anisotropy")) cfg->anisotropy = v < 0 ? -1 : std::min(v, 16);
             else if (!strcmp(key, "shadow_compare")) cfg->shadow_compare = std::clamp(v, 0, 3);
             else if (!strcmp(key, "game_hooks")) cfg->game_hooks = v != 0;
             else if (!strcmp(key, "skip_intro")) cfg->skip_intro = v != 0;
+            else if (!strcmp(key, "enemy_drops_100")) {
+                cfg->enemy_drops_100 = v != 0;
+                if (v != 0) LOGI(kTag, "settings: enemy_drops_100 on (every item in a drop table always drops)");
+            }
             else if (!strcmp(key, "render_pass_objects")) cfg->render_pass_objects = v != 0;
             else if (!strcmp(key, "render_scale")) cfg->render_scale = std::clamp(float(atof(value)), 0.5f, 1.0f);
             else if (!strcmp(key, "language")) {
@@ -478,8 +498,21 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
                                                          "zh-CN", "zh-TW", "en-GB", "fr-CA", "es-419"};
                 bool known = false;
                 for (const char* code : kLanguages) known = known || !strcmp(code, value);
-                if (known) cfg->language = value;
-                else LOGW(kTag, "settings: unknown language '%s': using %s", value, cfg->language.c_str());
+                // A game_language line decides what the game is told; `language` then only is the menu's language.
+                if (known && GameLanguageSetting(path).empty()) cfg->language = value;
+                else if (!known) LOGW(kTag, "settings: unknown language '%s': using %s", value, cfg->language.c_str());
+            }
+            else if (!strcmp(key, "game_language")) {
+                static const char* const kGameLanguages[] = {"en-US", "fr", "de", "it", "es", "pt", "ru", "ja", "ko",
+                                                             "zh-CN", "zh-TW", "en-GB", "fr-CA", "es-419"};
+                bool known = false;
+                for (const char* code : kGameLanguages) known = known || !strcmp(code, value);
+                if (known) {
+                    cfg->language = value;
+                    LOGI(kTag, "settings: game_language %s (the game is told this language, whatever the menu uses)", value);
+                } else if (strcmp(value, "auto") != 0) {
+                    LOGW(kTag, "settings: unknown game_language '%s': using %s", value, cfg->language.c_str());
+                }
             }
             else if (!strcmp(key, "bc_etc2")) cfg->bc_etc2 = v != 0;
             else if (!strcmp(key, "bc3_etc2")) cfg->bc3_etc2 = v != 0;
@@ -525,12 +558,30 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
             } else if (!strcmp(key, "settings_version")) settings_version = v;
             else if (!strcmp(key, "mali_barriers")) cfg->mali_barriers = v != 0;
             else if (!strcmp(key, "performance_mode")) cfg->performance_mode = v != 0;
+            else if (!strcmp(key, "mali_tile_turbo")) {
+                cfg->mali_tile_turbo = v != 0;
+                if (v != 0) LOGI(kTag, "settings: mali_tile_turbo on (used on Mali GPUs only)");
+            } else if (!strcmp(key, "shadow_quality")) {
+                cfg->shadow_quality = std::clamp(v, 0, 3);
+                if (cfg->shadow_quality != 3) LOGI(kTag, "settings: shadow_quality %d", cfg->shadow_quality);
+            } else if (!strcmp(key, "skip_prepass")) {
+                cfg->skip_prepass = v != 0;
+                if (v != 0) LOGI(kTag, "settings: skip_prepass on (experimental)");
+            } else if (!strcmp(key, "skip_hidden")) {
+                cfg->skip_hidden = std::clamp(v, 0, 2);
+                if (cfg->skip_hidden) LOGI(kTag, "settings: skip_hidden %d (experimental)", cfg->skip_hidden);
+            }
             else if (!strcmp(key, "texture_mip_skip")) cfg->texture_mip_skip = std::clamp(v, 0, 1);
+            else if (!strcmp(key, "texture_quality")) {
+                cfg->texture_quality = v <= 0 ? 100 : std::clamp(v, 25, 100);  // unreadable / 0: the original quality
+                have_texture_quality = true;
+            }
             else if (!strcmp(key, "pass_load_skip")) cfg->pass_load_skip = v != 0;
             else if (!strcmp(key, "staging_memory")) cfg->staging_memory = value;
             else if (!strcmp(key, "recorder_copies")) cfg->recorder_copies = v != 0;
             else if (!strcmp(key, "lighter_post_fx")) cfg->lighter_post_fx = v != 0;
             else if (!strcmp(key, "lighting_lite")) cfg->lighting_lite = v != 0;
+            else if (!strcmp(key, "lighting_off")) cfg->lighting_off = v != 0;
             else if (!strcmp(key, "gamma")) {
                 const float g = float(atof(value));
                 cfg->gamma = g >= 0.5f && g <= 3.0f ? g : 1.0f;
@@ -540,6 +591,8 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
             }
         }
         fclose(f);
+        // Files from before the texture quality slider only have the on/off texture_mip_skip: that was 50%.
+        if (!have_texture_quality && cfg->texture_mip_skip > 0) cfg->texture_quality = 50;
         // Version 2: the presentation default changed from mailbox to fifo. Files from before carry the old default
         // (written by the app), so `present_mode = mailbox` there becomes fifo, once; a choice made later is kept.
         if (settings_version < 2) {
@@ -607,9 +660,10 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
          path.c_str(), cfg->target_fps, cfg->dynamic_fps ? " (auto)" : cfg->unlocked_fps ? " (unlocked)" : "", cfg->async_pipelines ? "on" : "off", cfg->auto_capture ? "on" : "off",
          cfg->profile ? "on" : "off", cfg->gamma, cfg->exposure, cfg->present_mode.c_str(),
          g_face_by_position ? "position" : "label");
-    LOGI(kTag, "settings: gpu_driver %s, bc_enabler %d, language %s, render scale %.2f, shadow_compare %d, game_hooks %d, skip_intro %d, render_pass_objects %d, mali_barriers %d, performance_mode %d, texture_mip_skip %d, lighter_post_fx %d, present_mode %s, hole_test %d", cfg->gpu_driver.c_str(),
+    if (cfg->lighting_off) LOGI(kTag, "settings: lighting_off 1 (no shadow passes, no light effects)");
+    LOGI(kTag, "settings: gpu_driver %s, bc_enabler %d, language %s, render scale %.2f, shadow_compare %d, game_hooks %d, skip_intro %d, render_pass_objects %d, mali_barriers %d, performance_mode %d, texture_quality %d%%, lighter_post_fx %d, present_mode %s, hole_test %d", cfg->gpu_driver.c_str(),
          int(cfg->bc_enabler), cfg->language.c_str(), cfg->render_scale, cfg->shadow_compare,
-         int(cfg->game_hooks), int(cfg->skip_intro), int(cfg->render_pass_objects), int(cfg->mali_barriers), int(cfg->performance_mode), cfg->texture_mip_skip, int(cfg->lighter_post_fx), cfg->present_mode.c_str(),
+         int(cfg->game_hooks), int(cfg->skip_intro), int(cfg->render_pass_objects), int(cfg->mali_barriers), int(cfg->performance_mode), cfg->texture_quality, int(cfg->lighter_post_fx), cfg->present_mode.c_str(),
          cfg->hole_test);
     if (!g_custom_game_dir.empty()) LOGI(kTag, "settings: game_dir %s", g_custom_game_dir.c_str());
     LOGI(kTag, "settings: touch controls %s, opacity %.2f, camera speed %.2f%s", g_touch.enabled ? "on" : "off",

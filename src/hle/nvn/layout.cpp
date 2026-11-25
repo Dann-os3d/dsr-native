@@ -52,6 +52,17 @@ void Convert(uint8_t* linear, uint8_t* swizzled, const LevelLayout& l) {
 }
 }  // namespace
 
+int TextureMipSkip(const TextureState& tex, int levels, int quality) {
+    if (quality >= 100 || levels < 2) return 0;
+    int skip;
+    if (quality <= 37) skip = 2;
+    else if (quality <= 62) skip = 1;
+    else skip = std::max(tex.width, tex.height) >= 2048 ? 1 : 0;
+    const int small_side = std::min(tex.width, tex.height);
+    while (skip > 0 && (small_side >> skip) < 256) skip--;
+    return std::min(skip, levels - 1);
+}
+
 TextureLayout ComputeLayout(const TextureState& t) {
     TextureLayout out;
     const FormatInfo fi = GetFormatInfo(t.format);

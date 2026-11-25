@@ -12,11 +12,11 @@ This fork targets Android ARM64 devices, with the MediaTek Helio G99 / Mali-G57 
 
 - Frame pacing: `target_fps`, `dynamic_fps`, `min_fps`, `unlocked_fps`.
 - Resolution: `render_width`, `render_height`, `render_scale` (documented range 0.5–1.0).
-- Quality/performance: `performance_mode`, `lighter_post_fx`, `texture_mip_skip`, `max_anisotropy`, `exposure`.
+- Quality/performance: `performance_mode`, `lighter_post_fx`, `texture_quality`, `max_anisotropy`, `exposure`.
 - Texture compatibility: `bc_etc2`, `bc3_etc2`, `gpu_compression`.
 - Vulkan path switches: `mali_barriers`, `render_pass_objects`, `async_pipelines`, `record_thread`, `recorder_copies`, `staging_memory`.
 
-The Android in-game `SettingsMenu` already has Graphics and Driver tabs. Its Graphics tab offers 30/45/60 FPS, auto/unlocked pacing, render scale, performance mode, lighter post effects, BC3-to-ETC2 conversion, mip skipping, and the Mali barrier option. The Driver tab supports the system driver, bundled Turnip Gen8, and user-imported ZIP/SO files.
+The Android in-game `SettingsMenu` already has Graphics and Driver tabs. Its Graphics tab offers 30/45/60 FPS, auto/unlocked pacing, render scale, performance mode, lighter post effects, BC3-to-ETC2 conversion, a texture quality slider (100% down to 25%), and the Mali barrier option. The Driver tab supports the system driver, bundled Turnip Gen8, and user-imported ZIP/SO files.
 
 ### Important compatibility constraints
 
