@@ -286,7 +286,7 @@ public final class SettingsMenu {
             "tab_language"};
     private static final int TAB_GRAPHICS = 2, TAB_TOUCH = 3, TAB_CHEATS = 4, TAB_LANGUAGE = 5;
     private final TextView[] mTabs = new TextView[TAB_KEYS.length];
-    private TextView mHint, mClose, mScaleLabel;
+    private TextView mHint, mClose, mScaleLabel, mTexLabel;
     private int mTab = 0;
     private boolean mEditingLayout;
     private Map<String, String> mValues = new HashMap<>();
@@ -413,6 +413,7 @@ public final class SettingsMenu {
         for (int i = 0; i < mTabs.length; i++) mTabs[i].setSelected(i == tab);
         mBody.removeAllViews();
         mScaleLabel = null;
+        mTexLabel = null;
         mValues = readSettings();
         switch (tab) {
             case 0: buildDriverTab(); break;
@@ -450,18 +451,75 @@ public final class SettingsMenu {
         toggle("performance_mode", Strings.t("perf_t"), Strings.t("perf_n") + " " + Strings.t("changes_next"), "1", "0",
                 "0");
         renderScale();  // performance mode sets 75%; it can be moved freely afterwards
+        textureQuality();
+        toggle("sharp_hud", Strings.t("sharp_t"), Strings.t("sharp_n") + " " + Strings.t("changes_next"), "1", "0", "0");
+        choice("fxaa", Strings.t("fxaa_t"), Strings.t("fxaa_n") + " " + Strings.t("changes_next"),
+                new String[] {"0", "1", "2"},
+                new String[] {Strings.t("off"), Strings.t("fxaa_fast"), Strings.t("fxaa_quality")}, "0");
+        toggle("fsr", Strings.t("fsr_t"), Strings.t("fsr_n") + " " + Strings.t("changes_next"), "1", "0", "0");
         toggle("lighter_post_fx", Strings.t("post_t"), Strings.t("post_n") + " " + Strings.t("changes_next"), "1", "0",
                 "0");
         toggle("lighting_lite", Strings.t("lighting_lite_t"), Strings.t("lighting_lite_n") + " "
                 + Strings.t("changes_next"), "1", "0", "0");
+        toggle("lighting_off", Strings.t("lo_t"), Strings.t("lo_n") + " " + Strings.t("changes_next"), "1", "0", "0");
+        choice("shadow_quality", Strings.t("shq_t"), Strings.t("shq_n") + " " + Strings.t("changes_next"),
+                new String[] {"0", "1", "2", "3"},
+                new String[] {Strings.t("shq_off"), Strings.t("shq_low"), Strings.t("shq_med"), Strings.t("shq_high")}, "3");
+        choice("anisotropy", Strings.t("aniso_t"), Strings.t("aniso_n") + " " + Strings.t("changes_next"),
+                new String[] {"-1", "0", "2", "4", "8", "16"},
+                new String[] {Strings.t("aniso_game"), Strings.t("off"), "2x", "4x", "8x", "16x"}, "-1");
 
         section(Strings.t("sec_gpu"));
         note(Strings.t("gpu_n"));
         toggle("bc3_etc2", Strings.t("bc3_t"), Strings.t("bc3_n") + " " + Strings.t("changes_next"), "1", "0", "0");
-        toggle("texture_mip_skip", Strings.t("mip_t"), Strings.t("mip_n") + " " + Strings.t("changes_next"), "1", "0",
-                "0");
         toggle("mali_barriers", Strings.t("malib_t"), Strings.t("malib_n") + " " + Strings.t("changes_next"), "1", "0",
                 "0");
+        toggle("bc_astc", Strings.t("astc_t"), Strings.t("astc_n") + " " + Strings.t("changes_next"), "1", "0", "0");
+        choice("astc_block", Strings.t("astcb_t"), Strings.t("astcb_n") + " " + Strings.t("changes_next"),
+                new String[] {"4", "6", "8"},
+                new String[] {Strings.t("astcb_4"), Strings.t("astcb_6"), Strings.t("astcb_8")}, "4");
+        toggle("mali_tile_turbo", Strings.t("turbo_t"), Strings.t("turbo_n") + " " + Strings.t("changes_next"), "1", "0",
+                "0");
+        toggle("turbo_compat", Strings.t("tcompat_t"), Strings.t("tcompat_n") + " " + Strings.t("changes_next"), "1", "0",
+                "1");
+        toggle("skip_prepass", Strings.t("prepass_t"), Strings.t("prepass_n") + " " + Strings.t("changes_next"), "1", "0",
+                "0");
+        choice("skip_hidden", Strings.t("hidden_t"), Strings.t("hidden_n") + " " + Strings.t("changes_next"),
+                new String[] {"0", "1", "2"},
+                new String[] {Strings.t("off"), Strings.t("hidden_gentle"), Strings.t("hidden_aggr")}, "0");
+        choice("geo_cache_mb", Strings.t("geo_t"), Strings.t("geo_n") + " " + Strings.t("changes_next"),
+                new String[] {"192", "128", "96", "64"}, new String[] {"192 MB", "128 MB", "96 MB", "64 MB"}, "192");
+
+        section(Strings.t("mali_preset_t"));
+        note(Strings.t("mali_preset_n"));
+        presetRow(Strings.t("mali_preset_apply"), MALI_PRESET);
+        presetRow(Strings.t("mali_preset_reset"), MALI_DEFAULTS);
+    }
+
+    // One tap for Mali GPUs (and the way back): the settings of the Mali options in one go.
+    private static final String[][] MALI_PRESET = {{"mali_tile_turbo", "1"}, {"skip_prepass", "1"}, {"skip_hidden", "1"},
+            {"shadow_quality", "2"}, {"anisotropy", "4"}, {"geo_cache_mb", "128"}};
+    private static final String[][] MALI_DEFAULTS = {{"mali_tile_turbo", "0"}, {"skip_prepass", "0"}, {"skip_hidden", "0"},
+            {"shadow_quality", "3"}, {"anisotropy", "-1"}, {"geo_cache_mb", "192"}};
+
+    private void presetRow(String label, final String[][] values) {
+        final TextView row = chip(label, false);
+        row.setGravity(Gravity.CENTER);
+        row.setOnClickListener(v -> {
+            for (String[] kv : values) {
+                if (!writeSetting(kv[0], kv[1])) {
+                    cantSave();
+                    return;
+                }
+                mValues.put(kv[0], kv[1]);
+            }
+            showTab(TAB_GRAPHICS);
+            popup(Strings.t("mali_preset_t"), Strings.t("mali_preset_done"));
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(6);
+        mBody.addView(row, lp);
     }
 
     // ---- Driver tab ---------------------------------------------------------------------------------------------
@@ -727,6 +785,91 @@ public final class SettingsMenu {
         mBody.addView(bar, lp);
     }
 
+    // ---- texture quality ----------------------------------------------------------------------------------------
+
+    /** texture_quality steps: 25, 50, 75, 100 % (slider positions 0..3). */
+    private static final int TQ_MIN = 25, TQ_STEP = 25, TQ_STEPS = 3;
+
+    /** The texture quality in settings.txt (100 when unset; files from before the slider had texture_mip_skip = 50). */
+    private int currentTextureQuality() {
+        String v = mValues.get("texture_quality");
+        if (v == null) return "1".equals(mValues.get("texture_mip_skip")) ? 50 : 100;
+        int q = Math.round(parse(v, 100f));
+        if (q <= 0) return 100;
+        return Math.max(TQ_MIN, Math.min(100, q));
+    }
+
+    private void updateTexLabel(int q) {
+        if (mTexLabel == null) return;
+        String what = Strings.t(q >= 100 ? "tq_100" : q >= 75 ? "tq_75" : q >= 50 ? "tq_50" : "tq_25");
+        mTexLabel.setText(q + "%   ·   " + what);
+    }
+
+    private void textureQuality() {
+        final String title = Strings.t("tq_t");
+        TextView t = text(title, 15, TEXT, true);
+        t.setPadding(0, dp(10), 0, 0);
+        mBody.addView(t);
+        mBody.addView(text(Strings.t("tq_n") + " " + Strings.t("changes_next"), 12, DIM, false));
+        final int[] shown = {Math.max(TQ_MIN, Math.min(100, Math.round(currentTextureQuality() / (float) TQ_STEP) * TQ_STEP))};
+        mTexLabel = text("", 14, GOLD, true);
+        mTexLabel.setPadding(0, dp(6), 0, 0);
+        mBody.addView(mTexLabel);
+        updateTexLabel(shown[0]);
+
+        final SeekBar bar = new SeekBar(mA);
+        bar.setMax(TQ_STEPS);
+        bar.setProgress((shown[0] - TQ_MIN) / TQ_STEP);
+        bar.setFocusable(true);
+        bar.setPadding(dp(18), dp(12), dp(18), dp(12));
+        bar.setProgressTintList(ColorStateList.valueOf(GOLD));
+        bar.setThumbTintList(ColorStateList.valueOf(GOLD));
+        bar.setProgressBackgroundTintList(ColorStateList.valueOf(0xFF555555));
+        StateListDrawable bg = new StateListDrawable();
+        bg.addState(new int[] {android.R.attr.state_focused}, rounded(0xFF3A3A3A, 10, 0xFFFFFFFF));
+        bg.addState(new int[] {}, rounded(CARD, 10, 0));
+        bar.setBackground(bg);
+        final boolean[] touching = {false};
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar b, int progress, boolean fromUser) {
+                int q = TQ_MIN + progress * TQ_STEP;
+                updateTexLabel(q);
+                if (fromUser && !touching[0]) save(q, false);  // D-pad: saved at each step
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar b) {
+                touching[0] = true;
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar b) {
+                touching[0] = false;
+                save(TQ_MIN + b.getProgress() * TQ_STEP, true);
+            }
+
+            private void save(int q, boolean tell) {
+                if (q == shown[0]) return;
+                // Always written (even 100): a texture_quality line makes the game ignore the old texture_mip_skip.
+                if (!writeSetting("texture_quality", String.valueOf(q))) {
+                    cantSave();
+                    return;
+                }
+                shown[0] = q;
+                mValues.put("texture_quality", String.valueOf(q));
+                if (tell)
+                    popup(title, Strings.t("next_start", title));
+                else
+                    Toast.makeText(mA, Strings.t("changes_next"), Toast.LENGTH_SHORT).show();
+            }
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(6);
+        mBody.addView(bar, lp);
+    }
+
     // ---- Touch tab ----------------------------------------------------------------------------------------------
 
     private void buildTouchTab() {
@@ -892,6 +1035,10 @@ public final class SettingsMenu {
     }
 
     private void buildCheatsTab() {
+        // Read at start-up (the game loads its parameters once): works without the game running, unlike the cheat list.
+        section(Strings.t("sec_drops"));
+        toggle("enemy_drops_100", Strings.t("drops_t"), Strings.t("drops_n") + " " + Strings.t("changes_next"), "1", "0",
+                "0");
         section(Strings.t("sec_cheats"));
         String list;
         try {
@@ -1180,6 +1327,78 @@ public final class SettingsMenu {
             lp.topMargin = dp(6);
             mBody.addView(row, lp);
         }
+        gameLanguageSection();
+    }
+
+    // ---- Game language (only the languages this copy of the game has) -----------------------------------------------
+
+    /** Folder / file name fragments (lower case) that name a language in a game copy, and the code they stand for. */
+    private static final String[][] LANGUAGE_MARKS = {{"english", "en-US"}, {"french", "fr"}, {"german", "de"},
+            {"italian", "it"}, {"spanish", "es"}, {"portuguese", "pt"}, {"russian", "ru"}, {"japanese", "ja"},
+            {"korean", "ko"}, {"schinese", "zh-CN"}, {"simplifiedchinese", "zh-CN"}, {"tchinese", "zh-TW"},
+            {"traditionalchinese", "zh-TW"}};
+
+    /**
+     * The language codes (Strings.CODES) that the game copy in `root` carries, judged by folder and file names (up to
+     * 3 levels, not inside exefs). Empty when the copy does not say (its texts are inside the dvdbnd archives).
+     */
+    static java.util.Set<String> gameCopyLanguages(String root) {
+        java.util.Set<String> found = new java.util.HashSet<>();
+        if (root != null && !root.isEmpty()) scanLanguages(new File(root), 0, found, new int[] {5000});
+        return found;
+    }
+
+    private static void scanLanguages(File dir, int depth, java.util.Set<String> found, int[] budget) {
+        String[] names = dir.list();
+        if (names == null) return;
+        for (String n : names) {
+            if (budget[0]-- <= 0) return;
+            String low = n.toLowerCase(java.util.Locale.ROOT);
+            for (String[] mark : LANGUAGE_MARKS)
+                if (low.contains(mark[0])) found.add(mark[1]);
+            if (depth < 3 && !low.equals("exefs")) {
+                File f = new File(dir, n);
+                if (f.isDirectory()) scanLanguages(f, depth + 1, found, budget);
+            }
+        }
+    }
+
+    private void gameLanguageSection() {
+        section(Strings.t("sec_glang"));
+        java.util.Set<String> found = gameCopyLanguages(sGameDir);
+        final boolean filtered = !found.isEmpty();
+        android.util.Log.i("DSRNative", "game language selector: " + (filtered ? "copy has " + found : "copy does not list its languages")
+                + " (folder " + sGameDir + ")");
+        note(Strings.t(filtered ? "glang_found" : "glang_all"));
+        String cur = mValues.containsKey("game_language") ? mValues.get("game_language") : "auto";
+        if (cur == null || cur.isEmpty()) cur = "auto";
+        gameLanguageRow(Strings.t("glang_same"), "auto", cur.equalsIgnoreCase("auto"));
+        for (int i = 0; i < Strings.CODES.length; i++) {
+            String code = Strings.CODES[i];
+            boolean chosen = code.equalsIgnoreCase(cur);
+            if (filtered && !found.contains(code) && !chosen) continue;  // the copy does not have it
+            gameLanguageRow(Strings.NAMES[i], code, chosen);
+        }
+    }
+
+    private void gameLanguageRow(String label, final String code, boolean selected) {
+        final TextView row = chip(label, false);
+        row.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        row.setSelected(selected);
+        row.setOnClickListener(v -> {
+            if (row.isSelected()) return;
+            if (!writeSetting("game_language", code)) {
+                cantSave();
+                return;
+            }
+            mValues.put("game_language", code);
+            showTab(TAB_LANGUAGE);
+            popup(Strings.t("sec_glang"), Strings.t("lang_changed"));
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(6);
+        mBody.addView(row, lp);
     }
 
     private void chooseGameFolder(Uri uri) {
@@ -1312,7 +1531,7 @@ public final class SettingsMenu {
     /** Render scale performance mode sets (the player can move it afterwards; turning the mode off restores theirs). */
     private static final String PERF_SCALE = "0.75";
 
-    /** 1: the GPU has no BC support (performance mode then turns texture_mip_skip on too). */
+    /** 1: the GPU has no BC support (performance mode then lowers the texture quality to 50% too). */
     private static boolean gpuLacksBc() {
         try {
             return nativeGpuHasBc() == 0;
@@ -1321,22 +1540,38 @@ public final class SettingsMenu {
         }
     }
 
+    /** Texture quality performance mode sets on GPUs without BC support (never raises a lower choice). */
+    private static final int PERF_TEXTURE_QUALITY = 50;
+
     /**
      * Performance mode on: remembers the render scale and sets 75%, and on GPUs without BC support remembers
-     * texture_mip_skip and turns it on; off: puts the remembered values back.
+     * texture_quality and lowers it to 50% and turns on lighter post-processing; off: puts the remembered values back.
      */
     private void performanceScale(boolean on) {
-        // On GPUs without BC support (the weaker ones: Mali), performance mode also turns on texture mip skip and
-        // lighter post-processing; turning it off puts back what they were.
-        for (String key : new String[] {"texture_mip_skip", "lighter_post_fx"}) {
+        // On GPUs without BC support (the weaker ones: Mali), performance mode also lowers the texture quality and
+        // lightens post-processing; turning it off puts back what they were.
+        for (String key : new String[] {"texture_quality", "lighter_post_fx"}) {
+            final boolean tex = key.equals("texture_quality");
             if (on && gpuLacksBc()) {
-                String was = mValues.containsKey(key) ? mValues.get(key) : "0";
+                if (tex && currentTextureQuality() <= PERF_TEXTURE_QUALITY) continue;  // already as low or lower
+                String was = tex ? String.valueOf(currentTextureQuality())
+                        : (mValues.containsKey(key) ? mValues.get(key) : "0");
                 writeSetting(key + "_before_perf", was);
                 mValues.put(key + "_before_perf", was);
-                if (writeSetting(key, "1")) mValues.put(key, "1");
+                String now = tex ? String.valueOf(PERF_TEXTURE_QUALITY) : "1";
+                if (writeSetting(key, now)) mValues.put(key, now);
             } else if (!on) {
                 String before = mValues.get(key + "_before_perf");
-                if (before != null && !before.isEmpty()) {  // performance mode had turned it on: restored
+                if (tex && (before == null || before.isEmpty())) {
+                    // Performance mode may have been turned on by a version with the on/off texture_mip_skip switch.
+                    String old = mValues.get("texture_mip_skip_before_perf");
+                    if (old != null && !old.isEmpty()) {
+                        before = "1".equals(old) ? "50" : "100";
+                        writeSetting("texture_mip_skip_before_perf", "");
+                        mValues.put("texture_mip_skip_before_perf", "");
+                    }
+                }
+                if (before != null && !before.isEmpty()) {  // performance mode had changed it: restored
                     if (writeSetting(key, before)) mValues.put(key, before);
                     writeSetting(key + "_before_perf", "");
                     mValues.put(key + "_before_perf", "");
