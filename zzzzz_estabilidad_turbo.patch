@@ -1,0 +1,811 @@
+diff --git a/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java b/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
+index 726fbb0..c3fe1cb 100644
+--- a/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
++++ b/android/app/src/main/java/com/dsrnative/app/SettingsMenu.java
+@@ -480,6 +480,8 @@ public final class SettingsMenu {
+                 new String[] {Strings.t("astcb_4"), Strings.t("astcb_6"), Strings.t("astcb_8")}, "4");
+         toggle("mali_tile_turbo", Strings.t("turbo_t"), Strings.t("turbo_n") + " " + Strings.t("changes_next"), "1", "0",
+                 "0");
++        toggle("turbo_compat", Strings.t("tcompat_t"), Strings.t("tcompat_n") + " " + Strings.t("changes_next"), "1", "0",
++                "1");
+         toggle("skip_prepass", Strings.t("prepass_t"), Strings.t("prepass_n") + " " + Strings.t("changes_next"), "1", "0",
+                 "0");
+         choice("skip_hidden", Strings.t("hidden_t"), Strings.t("hidden_n") + " " + Strings.t("changes_next"),
+diff --git a/android/app/src/main/java/com/dsrnative/app/Strings.java b/android/app/src/main/java/com/dsrnative/app/Strings.java
+index dc1686e..f6a515a 100644
+--- a/android/app/src/main/java/com/dsrnative/app/Strings.java
++++ b/android/app/src/main/java/com/dsrnative/app/Strings.java
+@@ -629,6 +629,21 @@ final class Strings {
+         put("astcb_8", "8x8 (least memory)", "8x8 (moins de mémoire)", "8x8 (wenigster Speicher)", "8x8 (meno memoria)",
+                 "8x8 (menos memoria)", "8x8 (menos memória)", "8x8 (меньше памяти)", "8x8 (最小メモリ)", "8x8 (최소 메모리)",
+                 "8x8（最少内存）", "8x8（最少記憶體）");
++        put("tcompat_t", "Tile Turbo compatibility", "Compatibilité Tile Turbo", "Tile-Turbo-Kompatibilität",
++                "Compatibilità Tile Turbo", "Compatibilidad de Tile Turbo", "Compatibilidade do Tile Turbo",
++                "Совместимость Tile Turbo", "Tile Turbo互換モード", "Tile Turbo 호환 모드", "Tile Turbo 兼容模式", "Tile Turbo 相容模式");
++        put("tcompat_n",
++                "Keeps Tile Turbo's barriers a little wider when a texture or render target stops being read, which avoids the brief black flashes. On is recommended; turn it off only to get the exact original behaviour (a bit faster, may flash). Only matters with Tile Turbo on.",
++                "Garde les barrières de Tile Turbo un peu plus larges quand une texture ou une cible de rendu cesse d\u2019être lue, ce qui évite les brefs flashs noirs. Recommandé ; désactivez seulement pour le comportement d\u2019origine (un peu plus rapide, peut clignoter). N\u2019a d\u2019effet qu\u2019avec Tile Turbo.",
++                "Hält die Barrieren von Tile Turbo etwas weiter, wenn eine Textur oder ein Render-Ziel nicht mehr gelesen wird; das vermeidet kurze schwarze Blitze. Empfohlen; nur für das exakte Originalverhalten ausschalten (etwas schneller, kann blitzen). Nur mit Tile Turbo relevant.",
++                "Mantiene le barriere di Tile Turbo un po\u2019 più ampie quando una texture o un render target smette di essere letto, evitando i brevi lampi neri. Consigliato; disattiva solo per il comportamento originale (un po\u2019 più veloce, può lampeggiare). Conta solo con Tile Turbo attivo.",
++                "Mantiene las barreras de Tile Turbo un poco más amplias cuando una textura o un destino de render deja de leerse, lo que evita los destellos negros breves. Recomendado; desactívalo solo para el comportamiento original (algo más rápido, puede parpadear). Solo importa con Tile Turbo activado.",
++                "Mantém as barreiras do Tile Turbo um pouco mais amplas quando uma textura ou alvo de renderização deixa de ser lido, evitando os breves flashes pretos. Recomendado; desative só para o comportamento original (um pouco mais rápido, pode piscar). Só importa com o Tile Turbo ativo.",
++                "Делает барьеры Tile Turbo чуть шире, когда текстура или цель рендера перестаёт читаться, что убирает короткие чёрные вспышки. Рекомендуется; выключайте только ради исходного поведения (чуть быстрее, возможны вспышки). Важно только при включённом Tile Turbo.",
++                "テクスチャやレンダーターゲットの読み取りが終わるときのTile Turboのバリアを少し広く保ち、短い黒い点滅を防ぎます。推奨設定です。元の動作（やや高速だが点滅の可能性あり）にしたい場合のみオフにしてください。Tile Turboがオンのときだけ有効です。",
++                "텍스처나 렌더 타깃의 읽기가 끝날 때 Tile Turbo의 배리어를 조금 넓게 유지해 짧은 검은 깜빡임을 막습니다. 권장 설정이며, 원래 동작(약간 빠르지만 깜빡일 수 있음)을 원할 때만 끄세요. Tile Turbo를 켰을 때만 의미가 있습니다.",
++                "在纹理或渲染目标不再被读取时，让 Tile Turbo 的屏障稍微放宽，避免短暂的黑色闪烁。建议开启；只有想要完全原始的行为（稍快，但可能闪烁）时才关闭。仅在开启 Tile Turbo 时有效。",
++                "在紋理或渲染目標不再被讀取時，讓 Tile Turbo 的屏障稍微放寬，避免短暫的黑色閃爍。建議開啟；只有想要完全原始的行為（稍快，但可能閃爍）時才關閉。僅在開啟 Tile Turbo 時有效。");
+         put("sec_gpu", "GPU options", "Options GPU", "GPU-Optionen", "Opzioni GPU", "Opciones de GPU", "Opções de GPU",
+                 "Параметры GPU", "GPU オプション", "GPU 옵션", "GPU 选项", "GPU 選項");
+         put("gpu_n", "For GPUs such as Mali that lack the game's texture formats or draw in tiles. Off unless you are testing.",
+diff --git a/src/common/crash.cpp b/src/common/crash.cpp
+index 5c0754a..5d8abad 100644
+--- a/src/common/crash.cpp
++++ b/src/common/crash.cpp
+@@ -2,8 +2,12 @@
+ // write() into a stack buffer.
+ #include "common/crash.h"
+ 
++#include <fcntl.h>
+ #include <pthread.h>
+ #include <signal.h>
++#include <time.h>
++
++#include <atomic>
+ #include <string.h>
+ #include <ucontext.h>
+ #include <unistd.h>
+@@ -26,6 +30,28 @@ constexpr int kMaxModules = 8;
+ ModuleInfo g_modules[kMaxModules];
+ volatile int g_num_modules = 0;
+ 
++// Crash notes (SetCrashNote): two buffers, the handler reads the one published last.
++struct Note {
++    char path[512];
++    char text[4096];
++    size_t len;
++    int64_t until_ns;
++};
++Note g_notes[2];
++std::atomic<int> g_note{-1};
++
++void WriteNote() {
++    const int i = g_note.load();
++    if (i < 0) return;
++    const Note& n = g_notes[i];
++    if (MonotonicNs() >= n.until_ns) return;
++    const int fd = open(n.path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
++    if (fd < 0) return;
++    ssize_t r = write(fd, n.text, n.len);
++    (void)r;
++    close(fd);
++}
++
+ constexpr int kSignals[] = {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTRAP};
+ struct sigaction g_old[sizeof(kSignals) / sizeof(kSignals[0])];
+ volatile sig_atomic_t g_in_handler = 0;
+@@ -165,6 +191,7 @@ void Handler(int sig, siginfo_t* info, void* ctx) {
+ #endif
+         b.Str("=======================================\n");
+         Emit(b);
++        WriteNote();
+     }
+     // Hand over to the previous handler (debuggerd tombstone, etc.).
+     for (size_t i = 0; i < sizeof(kSignals) / sizeof(kSignals[0]); i++)
+@@ -184,6 +211,31 @@ void InstallCrashHandler() {
+     for (size_t i = 0; i < sizeof(kSignals) / sizeof(kSignals[0]); i++) sigaction(kSignals[i], &sa, &g_old[i]);
+ }
+ 
++int64_t MonotonicNs() {
++    timespec ts;
++    clock_gettime(CLOCK_MONOTONIC, &ts);
++    return int64_t(ts.tv_sec) * 1000000000 + ts.tv_nsec;
++}
++
++void SetCrashNote(const char* path, const char* text, size_t len, int64_t until_ns) {
++    static std::atomic<int> writers{0};
++    if (writers.fetch_add(1) != 0) {  // one at a time (the cheats' lock already ensures it)
++        writers.fetch_sub(1);
++        return;
++    }
++    const int cur = g_note.load(), next = cur == 0 ? 1 : 0;
++    Note& n = g_notes[next];
++    strncpy(n.path, path, sizeof(n.path) - 1);
++    n.path[sizeof(n.path) - 1] = 0;
++    n.len = len < sizeof(n.text) ? len : sizeof(n.text);
++    memcpy(n.text, text, n.len);
++    n.until_ns = until_ns;
++    g_note.store(next);
++    writers.fetch_sub(1);
++}
++
++void ClearCrashNote() { g_note.store(-1); }
++
+ void RegisterCrashModule(const char* name, uintptr_t base, size_t size) {
+     int n = g_num_modules;
+     if (n >= kMaxModules) return;
+diff --git a/src/common/crash.h b/src/common/crash.h
+index 981f57d..233db9d 100644
+--- a/src/common/crash.h
++++ b/src/common/crash.h
+@@ -13,4 +13,11 @@ void InstallCrashHandler();
+ // (matching the addresses in Ghidra/IDA when the ELF from tools/mkelf.py is loaded at base 0).
+ void RegisterCrashModule(const char* name, uintptr_t base, size_t size);
+ 
++// A file the crash handler writes if the process crashes before `until_ns` (CLOCK_MONOTONIC): `text` into `path`
++// (both copied; text up to 4 KiB). The cheats use it to know, at the next start, which cheats were on when the game
++// crashed soon after they started. ClearCrashNote: nothing is written.
++void SetCrashNote(const char* path, const char* text, size_t len, int64_t until_ns);
++void ClearCrashNote();
++int64_t MonotonicNs();
++
+ }  // namespace dsr
+diff --git a/src/hle/audio.cpp b/src/hle/audio.cpp
+index 8f4f9fd..4e14939 100644
+--- a/src/hle/audio.cpp
++++ b/src/hle/audio.cpp
+@@ -60,11 +60,16 @@ public:
+         AAudioStreamBuilder_setChannelCount(b, kChannels);
+         AAudioStreamBuilder_setSampleRate(b, kSampleRate);
+         AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+-        aaudio_result_t r = AAudioStreamBuilder_openStream(b, &stream_);
++        AAudioStream* stream = nullptr;
++        aaudio_result_t r = AAudioStreamBuilder_openStream(b, &stream);
+         AAudioStreamBuilder_delete(b);
++        {
++            std::lock_guard<std::mutex> lk(stream_m_);
++            stream_ = r == AAUDIO_OK ? stream : nullptr;
++            stream_base_ = written_;  // the new stream's frame counters start at 0 (see Pace)
++        }
+         if (r != AAUDIO_OK) {
+             LOGE(kTag, "AAudio openStream failed: %s", AAudio_convertResultToText(r));
+-            stream_ = nullptr;
+         } else {
+             // A low-latency stream defaults to a buffer of a burst or two (a few ms): the game's buffer is
+             // released only once its samples fit in there, so any delay of the game's audio thread (busy
+@@ -91,7 +96,10 @@ public:
+ #endif
+         worker_ = std::thread([this] { Run(); });
+ #if defined(__ANDROID__)
+-        if (Smooth()) pacer_ = std::thread([this] { Pace(); });
++        if (stream_ && smooth_) {
++            pacing_ = true;
++            pacer_ = std::thread([this] { Pace(); });
++        }
+ #endif
+     }
+ 
+@@ -182,13 +190,7 @@ private:
+         GuestBuffer* b;
+         uint64_t end;  // frames written up to and including this buffer
+     };
+-    bool Smooth() const {
+-#if defined(__ANDROID__)
+-        return stream_ && smooth_;
+-#else
+-        return false;
+-#endif
+-    }
++    bool Smooth() const { return pacing_; }  // the pacer thread runs (it also copes with the stream going away)
+     void Released(int n) {
+         TraceReleases(n);
+         if (event_) dsr::hle::os::SignalSystemEvent(event_);
+@@ -197,8 +199,6 @@ private:
+ #if defined(__ANDROID__)
+         int64_t last_read = -1;
+         std::chrono::steady_clock::time_point last_change{};
+-        const int32_t burst = std::max<int32_t>(1, AAudioStream_getFramesPerBurst(stream_));
+-        const int32_t buffer = std::max<int32_t>(burst, AAudioStream_getBufferSizeInFrames(stream_));
+         for (;;) {
+             {
+                 std::unique_lock<std::mutex> lk(m_);
+@@ -211,7 +211,27 @@ private:
+                 if (accepted_.empty()) continue;
+             }
+             const auto now = std::chrono::steady_clock::now();
+-            const int64_t read = AAudioStream_getFramesRead(stream_);
++            int64_t read;
++            int32_t burst, buffer;
++            {
++                // The worker thread may replace the stream (Reopen): read it under the lock. No stream: the
++                // accepted buffers are released at once (Play consumes the samples in real time meanwhile).
++                std::lock_guard<std::mutex> lk(stream_m_);
++                if (!stream_) {
++                    int n = 0;
++                    {
++                        std::lock_guard<std::mutex> lk2(m_);
++                        for (const Accepted& a : accepted_) released_.push_back(a.b);
++                        n = int(accepted_.size());
++                        accepted_.clear();
++                    }
++                    if (n) Released(n);
++                    continue;
++                }
++                burst = std::max<int32_t>(1, AAudioStream_getFramesPerBurst(stream_));
++                buffer = std::max<int32_t>(burst, AAudioStream_getBufferSizeInFrames(stream_));
++                read = int64_t(stream_base_) + AAudioStream_getFramesRead(stream_);
++            }
+             if (read != last_read) {
+                 last_read = read;
+                 last_change = now;
+@@ -294,24 +314,58 @@ private:
+ 
+     void Play(const int16_t* pcm, size_t frames) {
+ #if defined(__ANDROID__)
+-        if (stream_) {
+-            while (frames) {
+-                aaudio_result_t n = AAudioStream_write(stream_, pcm, int32_t(frames), 100'000'000);
+-                if (n < 0) {
+-                    LOGW(kTag, "AAudio write failed: %s", AAudio_convertResultToText(n));
+-                    break;
+-                }
++        if (!stream_) Reopen("no stream");  // a reopen that failed earlier: tried again now and then
++        while (stream_ && frames) {
++            aaudio_result_t n = AAudioStream_write(stream_, pcm, int32_t(frames), 100'000'000);
++            if (n >= 0) {
+                 pcm += size_t(n) * kChannels;
+                 frames -= size_t(n);
++                continue;
+             }
+-            return;
++            if (write_errors_++ < 10 || write_errors_ % 1000 == 0)
++                LOGW(kTag, "AAudio write failed: %s (%llu so far)", AAudio_convertResultToText(n),
++                     (unsigned long long)write_errors_);
++            // A disconnected stream (output device changed: headphones, Bluetooth, the audio server restarting
++            // its tracks) never works again: open a new one on the current device. Other errors: the stream is
++            // replaced as well, once in a while.
++            if (!Reopen(AAudio_convertResultToText(n))) break;
+         }
+ #endif
+         (void)pcm;
+-        // Null sink: consume in real time.
+-        std::this_thread::sleep_for(std::chrono::microseconds(frames * 1'000'000 / kSampleRate));
++        // No stream (null sink, or a write that failed): the samples are consumed in real time, so the game's audio
++        // thread keeps its pace. Returning at once made it hand over buffers as fast as it could (a busy thread).
++        if (frames) std::this_thread::sleep_for(std::chrono::microseconds(frames * 1'000'000 / kSampleRate));
+     }
+ 
++#if defined(__ANDROID__)
++    // Closes the stream and opens a new one on the current output device, at most every 500 ms (a device with no
++    // output at all would otherwise be retried for every buffer). True if a new stream is playing.
++    bool Reopen(const char* why) {
++        const auto now = std::chrono::steady_clock::now();
++        if (now - last_reopen_ < std::chrono::milliseconds(500)) return false;
++        last_reopen_ = now;
++        AAudioStream* old;
++        {
++            std::lock_guard<std::mutex> lk(stream_m_);
++            old = stream_;
++            stream_ = nullptr;
++        }
++        if (old) {
++            AAudioStream_requestStop(old);
++            AAudioStream_close(old);
++        }
++        Open();
++        if (!stream_) {
++            if (reopens_failed_++ < 5) LOGW(kTag, "AAudio stream lost (%s): no new stream yet; retrying", why);
++            return false;
++        }
++        AAudioStream_requestStart(stream_);
++        reopens_++;
++        LOGI(kTag, "AAudio stream lost (%s): a new stream was opened (%d so far)", why, reopens_);
++        return true;
++    }
++#endif
++
+     void* event_;
+     int channels_;
+     std::vector<int16_t> stereo_;
+@@ -325,10 +379,17 @@ private:
+     std::thread pacer_;
+     uint64_t written_ = 0;
+     bool smooth_ = dsr::GetRuntime().config.audio_smooth;
++    bool pacing_ = false;
+     std::thread worker_;
+     bool running_ = false;
+ #if defined(__ANDROID__)
++    // Written by the worker thread (Open / Reopen), read by Pace: swapped under stream_m_.
+     AAudioStream* stream_ = nullptr;
++    std::mutex stream_m_;
++    uint64_t stream_base_ = 0;  // written_ when the stream was opened: its frame counters start from there
++    uint64_t write_errors_ = 0;
++    int reopens_ = 0, reopens_failed_ = 0;
++    std::chrono::steady_clock::time_point last_reopen_{};
+ #endif
+ };
+ 
+diff --git a/src/hle/misc.cpp b/src/hle/misc.cpp
+index dbaa939..0c9b5e1 100644
+--- a/src/hle/misc.cpp
++++ b/src/hle/misc.cpp
+@@ -32,8 +32,13 @@ uint64_t PackCode(const char* s) {
+ HLE_FUNC(_ZN2nn2oe10InitializeEv, void, oe_Initialize, ()) {}
+ HLE_FUNC(_ZN2nn2oe16GetOperationModeEv, int, oe_GetOperationMode, ()) { return dsr::GetRuntime().config.docked ? 1 : 0; }
+ HLE_FUNC(_ZN2nn2oe20GetCurrentFocusStateEv, int, oe_GetCurrentFocusState, ()) { return 1; /* InFocus */ }
++// The Switch reports Chinese as the script codes zh-Hans / zh-Hant (the region codes zh-CN / zh-TW are only
++// legacy enum values), and the game looks for exactly those strings: given zh-CN or zh-TW it fell back to English.
+ HLE_FUNC(_ZN2nn2oe18GetDesiredLanguageEv, uint64_t, oe_GetDesiredLanguage, ()) {
+-    return PackCode(dsr::GetRuntime().config.language.c_str());
++    const std::string& lang = dsr::GetRuntime().config.language;
++    if (lang == "zh-CN") return PackCode("zh-Hans");
++    if (lang == "zh-TW") return PackCode("zh-Hant");
++    return PackCode(lang.c_str());
+ }
+ HLE_FUNC(_ZN2nn2oe17GetDisplayVersionEPNS0_14DisplayVersionE, void, oe_GetDisplayVersion, (char* out)) {
+     const char* v = dsr::GameVersion();  // the version the program is (1.0.0 or the 1.0.3 update)
+diff --git a/src/hle/nvn/commands.cpp b/src/hle/nvn/commands.cpp
+index aa76698..190b791 100644
+--- a/src/hle/nvn/commands.cpp
++++ b/src/hle/nvn/commands.cpp
+@@ -4,7 +4,8 @@
+ // returns an NVNcommandHandle) and submits handles to a queue. We record each command into a host
+ // CmdList; EndRecording files the list under a new handle; nvnQueueSubmitCommands hands the lists to
+ // the backend in order. Handles may be submitted many times; the oldest are dropped once there are
+-// more than kMaxHandles (real NVN handles die when their command memory is reused anyway).
++// more than kMaxHandles (real NVN handles die when their command memory is reused anyway), except lists
++// used repeatedly and lists not used yet (see EndRecording).
+ //
+ // Every texture referenced by a command is captured by value (description + storage address) at
+ // record time, so later Finalize/re-Initialize of the NVN object does not affect recorded work.
+@@ -43,6 +44,11 @@ constexpr const char* kTag = "nvn";
+ // the game submits more than once (static command sets) are kept regardless (up to kMaxKept).
+ constexpr size_t kMaxHandles = 512;
+ constexpr size_t kMaxKept = 2048;
++// Upload lists (a staging buffer -> texture copy and little else) are kept apart, up to this many: the engine
++// records one when it creates a CPU-writable texture and calls it (CallCommands) whenever the CPU has written
++// the texture, possibly minutes later. The player's face texture is filled that way after the save loads; its
++// list had long been dropped from the recent ones, so the face stayed black.
++constexpr size_t kMaxUploads = 4096;
+ 
+ // The game checks GetCommandMemoryUsed before submitting and skips buffers that report 0, so report a
+ // plausible figure: an estimate of what real NVN would have written, reset when memory is (re)added.
+@@ -63,6 +69,7 @@ std::unordered_map<uint64_t, std::shared_ptr<const CmdList>> g_handles;
+ std::deque<uint64_t> g_handle_order;
+ std::unordered_map<uint64_t, uint32_t> g_submit_counts;  // submissions per live handle
+ std::deque<uint64_t> g_kept;                               // handles submitted twice or more
++std::deque<uint64_t> g_uploads;                            // upload lists (see kMaxUploads)
+ uint64_t g_next_handle = 1;
+ 
+ GpuStats g_stats;
+@@ -175,6 +182,12 @@ void AddControlMemory(void* cb, void*, size_t) { RecorderOf(cb).control_used = 0
+ // Field reads only: Table::Copy would copy the whole recorder, every command recorded so far included.
+ size_t GetCommandMemoryUsed(const void* cb) { return RecorderOf(const_cast<void*>(cb)).command_used; }
+ size_t GetControlMemoryUsed(const void* cb) { return RecorderOf(const_cast<void*>(cb)).control_used; }
++bool IsUploadList(const CmdList& l) {
++    if (l.empty() || l.size() > 8) return false;
++    for (const Cmd& c : l)
++        if (c.type == CmdType::CopyBufferToTexture) return true;
++    return false;
++}
+ uint64_t EndRecording(void* cb) {
+     Recorder& r = RecorderOf(cb);
+     r.last_size = r.cmds.size();
+@@ -193,7 +206,17 @@ uint64_t EndRecording(void* cb) {
+     g_end_count++;
+     std::lock_guard<std::mutex> lk(g_handle_mutex);
+     uint64_t h = g_next_handle++;
++    const bool upload = IsUploadList(*list);
+     g_handles.emplace(h, std::move(list));
++    if (upload) {  // kept apart, for as long as the game may call it
++        g_uploads.push_back(h);
++        while (g_uploads.size() > kMaxUploads) {
++            g_handles.erase(g_uploads.front());
++            g_submit_counts.erase(g_uploads.front());
++            g_uploads.pop_front();
++        }
++        return h;
++    }
+     g_handle_order.push_back(h);
+     while (g_handle_order.size() > kMaxHandles) {
+         const uint64_t old = g_handle_order.front();
+@@ -220,14 +243,30 @@ bool IsRecording(const void* cb) { return RecorderOf(const_cast<void*>(cb)).reco
+ // game's render thread a large share of its time.
+ void CallCommands(void* cb, int n, const uint64_t* handles) {
+     Recorder& r = RecorderOf(cb);
+-    for (int i = 0; i < n; i++)
+-        if (auto list = FindHandle(handles[i])) {
+-            Cmd c;
+-            c.type = CmdType::CallList;
+-            c.obj = std::move(list);
+-            r.cmds.push_back(std::move(c));
+-            r.command_used += kBytesPerCommand;
++    for (int i = 0; i < n; i++) {
++        std::shared_ptr<const CmdList> list;
++        {
++            std::lock_guard<std::mutex> lk(g_handle_mutex);
++            auto it = g_handles.find(handles[i]);
++            if (it != g_handles.end()) {
++                list = it->second;
++                g_submit_counts[handles[i]]++;  // a use, like a submission (decides how long it is kept)
++            }
+         }
++        if (!list) {
++            g_unknown_handles++;
++            static std::atomic<int> logged{0};
++            if (logged.fetch_add(1) < 8)
++                LOGW(kTag, "nvnCommandBufferCallCommands: handle %llu is no longer known (its commands are lost)",
++                     (unsigned long long)handles[i]);
++            continue;
++        }
++        Cmd c;
++        c.type = CmdType::CallList;
++        c.obj = std::move(list);
++        r.cmds.push_back(std::move(c));
++        r.command_used += kBytesPerCommand;
++    }
+ }
+ 
+ // A render target's view picks the mip level and array layer that is rendered into.
+diff --git a/src/hle/nvn/vk_backend.cpp b/src/hle/nvn/vk_backend.cpp
+index 4882094..249584b 100644
+--- a/src/hle/nvn/vk_backend.cpp
++++ b/src/hle/nvn/vk_backend.cpp
+@@ -1682,8 +1682,11 @@ private:
+         // mali_tile_turbo (experimental, Mali only; from PR #73 by Dann-os3d): see LayoutScope.
+         const bool is_mali = props_.vendorID == 0x13B5 || strstr(props_.deviceName, "Mali") != nullptr;
+         tile_turbo_ = dsr::GetRuntime().config.mali_tile_turbo && is_mali;
++        turbo_compat_ = dsr::GetRuntime().config.turbo_compat;
+         if (tile_turbo_)
+-            LOGI(kTag, "settings mali_tile_turbo = 1: layout-scoped barriers (unknown layouts keep the full barrier)");
++            LOGI(kTag, "settings mali_tile_turbo = 1: layout-scoped barriers (unknown layouts keep the full barrier)%s",
++                 turbo_compat_ ? "; compatibility on: the source scope also covers the writes before a read-only layout"
++                               : "");
+         else if (dsr::GetRuntime().config.mali_tile_turbo)
+             LOGI(kTag, "settings mali_tile_turbo = 1 ignored: not a Mali GPU");
+         if (!begin_rendering_ || !end_rendering_) {
+@@ -3668,6 +3671,14 @@ private:
+     // other layouts keep the full barrier. The pass-to-pass attachment barrier is likewise narrowed to the kinds of
+     // attachment (colour, depth) that have an unsynchronised write.
+     bool tile_turbo_ = false;
++    // turbo_compat (settings, on by default): against the brief black flashes of the narrowed barriers. A read-only layout
++    // (sampled, copy source) is entered by a barrier that only makes the writes before it visible to ITS readers (the
++    // pass-end barrier, the upload barrier). When the image later leaves that layout, a source scope of just the readers
++    // does not cover those writes any more: the next writer or reader may then see stale tile memory (a render target
++    // reused as a texture, or loaded again by the next pass, reads black for a frame or two). In compatibility mode the
++    // source scope of a barrier that leaves a read-only layout (or UNDEFINED, which may still have users in flight)
++    // also covers the colour, depth and copy writes; destination scopes stay as narrow as before.
++    bool turbo_compat_ = true;
+     uint64_t turbo_scoped_ = 0, turbo_full_ = 0;
+     static bool LayoutScope(VkImageLayout layout, bool source, VkPipelineStageFlags* stages, VkAccessFlags* access) {
+         switch (layout) {
+@@ -3712,6 +3723,13 @@ private:
+             VkPipelineStageFlags ss = 0, ds = 0;
+             VkAccessFlags sa = 0, da = 0;
+             if (LayoutScope(from, true, &ss, &sa) && LayoutScope(to, false, &ds, &da)) {
++                if (turbo_compat_ && (from == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
++                                      from == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL || from == VK_IMAGE_LAYOUT_UNDEFINED)) {
++                    ss |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
++                          VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
++                    sa |= VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
++                          VK_ACCESS_TRANSFER_WRITE_BIT;
++                }
+                 src_stages = ss;
+                 dst_stages = ds;
+                 src_access = sa;
+diff --git a/src/hle/os/thread.cpp b/src/hle/os/thread.cpp
+index 9455f67..05a6a8b 100644
+--- a/src/hle/os/thread.cpp
++++ b/src/hle/os/thread.cpp
+@@ -235,8 +235,20 @@ HLE_ALIAS(nnosDestroyThread, nn_os_DestroyThread);
+ HLE_FUNC(_ZN2nn2os16GetCurrentThreadEv, GuestThread*, nn_os_GetCurrentThread, ()) { return CurrentThread(); }
+ HLE_ALIAS(nnosGetCurrentThread, nn_os_GetCurrentThread);
+ 
++// Each guest thread name, once (which of the game's worker threads exist; diagnostics).
++static void LogThreadName(const char* name) {
++    static std::mutex m;
++    static std::vector<std::string> seen;
++    const std::string n = name ? name : "";
++    std::lock_guard<std::mutex> lk(m);
++    if (seen.size() >= 128 || std::find(seen.begin(), seen.end(), n) != seen.end()) return;
++    seen.push_back(n);
++    LOGI("os", "guest thread named \"%s\"", n.c_str());
++}
++
+ HLE_FUNC(_ZN2nn2os13SetThreadNameEPNS0_10ThreadTypeEPKc, void, nn_os_SetThreadName,
+          (GuestThread * t, const char* name)) {
++    LogThreadName(name);
+     if (HostThread* ht = Lookup(t)) {
+         ht->name = name ? name : "";
+         ht->name_ptr = nullptr;
+@@ -246,6 +258,7 @@ HLE_FUNC(_ZN2nn2os13SetThreadNameEPNS0_10ThreadTypeEPKc, void, nn_os_SetThreadNa
+ }
+ 
+ HLE_FUNC(nnosSetThreadNamePointer, void, nnosSetThreadNamePointer, (GuestThread * t, const char* name)) {
++    LogThreadName(name);
+     if (HostThread* ht = Lookup(t)) {
+         ht->name = name ? name : "";
+         ht->name_ptr = name;
+diff --git a/src/loader/module.cpp b/src/loader/module.cpp
+index 472a542..ad567f6 100644
+--- a/src/loader/module.cpp
++++ b/src/loader/module.cpp
+@@ -119,9 +119,14 @@ bool Module::WriteReadOnly(uint64_t off, const void* data, size_t size) {
+     if (mprotect(reinterpret_cast<void*>(page_lo), page_hi - page_lo, PROT_READ | PROT_WRITE | PROT_EXEC) != 0)
+         return false;
+     memcpy(reinterpret_cast<void*>(addr), data, size);
++    // Back to what Protect gave each page. On 16 KiB-page devices a page can hold the end of .rodata and the start
++    // of .data: it must stay writable (made read-only, the game's next write there crashed).
+     for (uintptr_t p = page_lo; p < page_hi; p += host_page_) {
+-        const bool text = p - base_ < uint64_t(nso_->text.mem_offset) + nso_->text.size;
+-        mprotect(reinterpret_cast<void*>(p), host_page_, text ? PROT_READ | PROT_EXEC : PROT_READ);
++        const size_t pg = (p - base_) / host_page_;
++        int prot = PROT_READ;
++        if (pg < page_prot_.size()) prot = page_prot_[pg];
++        else if (p - base_ < uint64_t(nso_->text.mem_offset) + nso_->text.size) prot = PROT_READ | PROT_EXEC;
++        mprotect(reinterpret_cast<void*>(p), host_page_, prot);
+     }
+     arch::FlushICache(reinterpret_cast<void*>(addr), size);
+     return true;
+@@ -277,6 +282,7 @@ bool Module::Protect(std::string* err) {
+         pg = run;
+     }
+     if (rwx_pages) LOGW(kTag, "%zu host page(s) needed RWX (segment boundary inside a page)", rwx_pages);
++    page_prot_ = prot;
+     arch::FlushICache(reinterpret_cast<void*>(base_), nso_->text.size);
+     return true;
+ }
+diff --git a/src/loader/module.h b/src/loader/module.h
+index 5fb61f0..17238a1 100644
+--- a/src/loader/module.h
++++ b/src/loader/module.h
+@@ -81,6 +81,7 @@ private:
+     uintptr_t base_ = 0;
+     size_t size_ = 0;       // reserved size (page aligned)
+     size_t host_page_ = 4096;
++    std::vector<int> page_prot_;  // each host page's protection as Protect set it (WriteReadOnly restores it)
+     std::vector<ImportBinding> imports_;
+     void* thunk_block_ = nullptr;
+     size_t thunk_block_size_ = 0;
+diff --git a/src/platform/android/android_main.cpp b/src/platform/android/android_main.cpp
+index 7143f38..9ad6f4f 100644
+--- a/src/platform/android/android_main.cpp
++++ b/src/platform/android/android_main.cpp
+@@ -566,6 +566,8 @@ void LoadSettings(const std::string& path, dsr::RuntimeConfig* cfg) {
+             else if (!strcmp(key, "mali_tile_turbo")) {
+                 cfg->mali_tile_turbo = v != 0;
+                 if (v != 0) LOGI(kTag, "settings: mali_tile_turbo on (used on Mali GPUs only)");
++            } else if (!strcmp(key, "turbo_compat")) {
++                cfg->turbo_compat = v != 0;
+             } else if (!strcmp(key, "shadow_quality")) {
+                 cfg->shadow_quality = std::clamp(v, 0, 3);
+                 if (cfg->shadow_quality != 3) LOGI(kTag, "settings: shadow_quality %d", cfg->shadow_quality);
+diff --git a/src/runtime/cheats.cpp b/src/runtime/cheats.cpp
+index ccb40c9..1bedcbe 100644
+--- a/src/runtime/cheats.cpp
++++ b/src/runtime/cheats.cpp
+@@ -3,8 +3,11 @@
+ #include <dirent.h>
+ #include <pthread.h>
+ #include <sys/stat.h>
++#include <sys/uio.h>
++#include <unistd.h>
+ 
+ #include <algorithm>
++#include <cerrno>
+ #include <atomic>
+ #include <chrono>
+ #include <cstdio>
+@@ -15,6 +18,7 @@
+ #include <thread>
+ #include <vector>
+ 
++#include "common/crash.h"
+ #include "common/log.h"
+ #include "common/platform.h"
+ #include "hle/input.h"
+@@ -39,8 +43,16 @@ std::vector<Entry> g_entries;
+ std::mutex g_program_mutex;
+ std::shared_ptr<const std::vector<uint32_t>> g_program;  // master codes, then the enabled cheats
+ std::atomic<bool> g_started{false};
++// After a crash soon after cheats started (see ArmCrashNote): master codes are not run this session (the player can
++// turn them back on by turning any cheat on), and the warning for the settings menu.
++bool g_masters_paused = false;
++std::string g_warning;
++
++// A crash this soon after the cheats that are on started (game start, or one turned on) is blamed on them.
++constexpr int64_t kCrashWindowNs = 180'000'000'000;  // 3 minutes
+ 
+ std::string OwnFile() { return g_dir + "/" + g_build + ".txt"; }
++std::string CrashedFile() { return g_dir + "/" + g_build + ".crashed"; }
+ std::string EnabledFile() { return g_dir + "/" + g_build + ".enabled"; }
+ 
+ bool ReadFile(const std::string& path, std::string* out) {
+@@ -117,16 +129,74 @@ void SaveEnabled() {
+ 
+ // The program run 12 times a second: master codes first (Atmosphère runs them first too), then the enabled cheats,
+ // each with the conditional blocks it leaves open closed.
+-void Rebuild() {
++// Running cheats can crash the game (cheats for another version or edition write the wrong places; some codes do
++// not suit DSR Native). The crash handler is told which cheats are on: if the game crashes within kCrashWindowNs,
++// it writes them to <BUILD ID>.crashed, and the next start turns them off and warns the player (TakeWarning).
++// Since `fresh`: a cheat was just turned on, or the game just started: the window starts again.
++void ArmCrashNote(bool fresh) {
++    std::string text;
++    for (const Entry& e : g_entries)
++        if (e.enabled && e.cheat.error.empty() && (!e.cheat.master || !g_masters_paused))
++            text += std::string(e.cheat.master ? "master\t" : "on\t") + e.cheat.name + "\n";
++    if (text.empty()) {
++        ClearCrashNote();
++        return;
++    }
++    static int64_t until = 0;
++    if (fresh || until == 0) until = MonotonicNs() + kCrashWindowNs;
++    SetCrashNote(CrashedFile().c_str(), text.data(), text.size(), until);
++}
++
++void Rebuild(bool fresh = false) {
+     auto prog = std::make_shared<std::vector<uint32_t>>();
+     for (int pass = 0; pass < 2; pass++)
+         for (const Entry& e : g_entries) {
+             if (!e.cheat.error.empty() || e.cheat.master != (pass == 0) || (!e.cheat.master && !e.enabled)) continue;
++            if (e.cheat.master && g_masters_paused) continue;
+             prog->insert(prog->end(), e.cheat.code.begin(), e.cheat.code.end());
+             for (int i = OpenBlocks(e.cheat.code); i > 0; i--) prog->push_back(0x20000000);
+         }
+-    std::lock_guard<std::mutex> lk(g_program_mutex);
+-    g_program = std::move(prog);
++    {
++        std::lock_guard<std::mutex> lk(g_program_mutex);
++        g_program = std::move(prog);
++    }
++    ArmCrashNote(fresh);
++}
++
++// The previous session crashed soon after cheats started (<BUILD ID>.crashed): those cheats are turned off (master
++// codes paused for this session) and the player is told. Under g_mutex, after Load.
++void HandleCrashNote() {
++    std::string text;
++    if (!ReadFile(CrashedFile(), &text)) return;
++    remove(CrashedFile().c_str());
++    std::set<std::string> on, masters;
++    size_t pos = 0;
++    while (pos < text.size()) {
++        size_t e = text.find('\n', pos);
++        if (e == std::string::npos) e = text.size();
++        const std::string line = text.substr(pos, e - pos);
++        pos = e + 1;
++        const size_t tab = line.find('\t');
++        if (tab == std::string::npos) continue;
++        (line.compare(0, tab, "master") == 0 ? masters : on).insert(line.substr(tab + 1));
++    }
++    std::string names;
++    for (Entry& e : g_entries) {
++        if (e.cheat.master ? !masters.count(e.cheat.name) : !(e.enabled && on.count(e.cheat.name))) continue;
++        if (e.cheat.master) {
++            g_masters_paused = true;
++        } else {
++            e.enabled = false;
++        }
++        if (names.find("\"" + e.cheat.name + "\"") == std::string::npos)
++            names += std::string(names.empty() ? "" : ", ") + "\"" + e.cheat.name + "\"" + (e.cheat.master ? " (master code)" : "");
++    }
++    if (names.empty()) return;
++    SaveEnabled();
++    Rebuild();
++    g_warning = names;
++    LOGW(kTag, "the game crashed last time soon after these cheats started: %s. They are off now%s.", names.c_str(),
++         g_masters_paused ? " (master codes paused until a cheat is turned on)" : "");
+ }
+ 
+ // (Re)reads every cheat file for the build. Under g_mutex.
+@@ -174,8 +244,7 @@ public:
+     }
+     bool Read(uint64_t addr, void* out, size_t size) override {
+         if (!Valid(addr, size)) return false;
+-        memcpy(out, reinterpret_cast<const void*>(uintptr_t(addr)), size);
+-        return true;
++        return SafeCopy(out, reinterpret_cast<const void*>(uintptr_t(addr)), size, false);
+     }
+     bool Write(uint64_t addr, const void* in, size_t size) override {
+         if (!Valid(addr, size)) return false;
+@@ -198,14 +267,40 @@ public:
+                 return true;
+             }
+         }
+-        memcpy(reinterpret_cast<void*>(uintptr_t(addr)), in, size);
+-        return true;
++        return SafeCopy(reinterpret_cast<void*>(uintptr_t(addr)), in, size, true);
+     }
+     void Log(const std::string& line) override {
+         if (logs_++ < 200) LOGI(kTag, "%s", line.c_str());
+     }
+ 
+ private:
++    // Copies to or from the game's memory without crashing on a page that is not there or not writable: through
++    // process_vm_readv / writev on our own process (an error, not a fault). If the kernel refuses those calls, a
++    // plain copy (the ranges are checked by Valid).
++    bool SafeCopy(void* dst, const void* src, size_t size, bool to_game) {
++        if (vm_calls_ok_) {
++            iovec local{to_game ? const_cast<void*>(src) : dst, size};
++            iovec remote{to_game ? dst : const_cast<void*>(src), size};
++            const ssize_t n = to_game ? process_vm_writev(getpid(), &local, 1, &remote, 1, 0)
++                                      : process_vm_readv(getpid(), &local, 1, &remote, 1, 0);
++            if (n == ssize_t(size)) return true;
++            if (n < 0 && (errno == ENOSYS || errno == EPERM)) {
++                vm_calls_ok_ = false;
++                LOGW(kTag, "process_vm_%s not allowed (%s): plain copies", to_game ? "writev" : "readv",
++                     strerror(errno));
++            } else {
++                if (fault_logs_++ < 8)
++                    LOGW(kTag, "a cheat %s %p, which is not %s: skipped", to_game ? "writes" : "reads",
++                         to_game ? dst : src, to_game ? "writable" : "readable");
++                return false;
++            }
++        }
++        memcpy(dst, src, size);
++        return true;
++    }
++    bool vm_calls_ok_ = true;
++    size_t fault_logs_ = 0;
++
+     static bool Valid(uint64_t addr, size_t size) {
+         const loader::Module& m = GetRuntime().main;
+         const uint64_t mb = m.base(), me = mb + m.nso().image_size();
+@@ -298,6 +393,8 @@ void Start(const std::string& dir) {
+         for (char& c : g_build) c = char(toupper(static_cast<unsigned char>(c)));
+         mkdir(dir.c_str(), 0775);
+         Load();
++        HandleCrashNote();
++        Rebuild(true);  // the crash window starts with the game
+         if (g_entries.empty())
+             LOGI(kTag, "no cheats for build %s (put them in %s)", g_build.c_str(), OwnFile().c_str());
+         else
+@@ -322,11 +419,12 @@ bool SetEnabled(size_t index, bool on) {
+     Entry& e = g_entries[index];
+     if (!e.cheat.error.empty() || e.cheat.master) return false;
+     e.enabled = on;
++    if (on) g_masters_paused = false;  // the player is trying cheats again: master codes run again too
+     // Cheats with the same name (in two files) go on and off together: the saved list is by name.
+     for (Entry& o : g_entries)
+         if (o.cheat.name == e.cheat.name && o.cheat.error.empty() && !o.cheat.master) o.enabled = on;
+     SaveEnabled();
+-    Rebuild();
++    Rebuild(on);
+     LOGI(kTag, "\"%s\" %s", e.cheat.name.c_str(), on ? "on" : "off");
+     return true;
+ }
+@@ -376,6 +474,15 @@ std::string Check(const std::string& text) {
+     return std::string();
+ }
+ 
++std::string TakeWarning() {
++    std::lock_guard<std::mutex> lk(g_mutex);
++    std::string w;
++    w.swap(g_warning);
++    return w;
++}
++
++bool Started() { return g_started.load(); }
++
+ std::string Text(size_t index) {
+     std::lock_guard<std::mutex> lk(g_mutex);
+     return index < g_entries.size() ? g_entries[index].cheat.text : std::string();
+diff --git a/src/runtime/cheats.h b/src/runtime/cheats.h
+index dd8d17f..e8208ff 100644
+--- a/src/runtime/cheats.h
++++ b/src/runtime/cheats.h
+@@ -24,5 +24,9 @@ bool Remove(size_t index);
+ std::string Check(const std::string& text);
+ // The cheat as written in its file (for showing its codes).
+ std::string Text(size_t index);
++// The cheats turned off at this start because the game crashed soon after they started last time (names, quoted,
++// comma-separated), once; "" if none. Started: Start has run.
++std::string TakeWarning();
++bool Started();
+ 
+ }  // namespace dsr::cheats
+diff --git a/src/runtime/runtime.h b/src/runtime/runtime.h
+index 05cb5bd..17e4263 100644
+--- a/src/runtime/runtime.h
++++ b/src/runtime/runtime.h
+@@ -142,6 +142,10 @@ struct RuntimeConfig {
+     // mali_tile_turbo (experimental, Mali GPUs only): image layout transitions scoped to the stages and accesses their
+     // layouts name, instead of waiting for / blocking all GPU work (vk_backend.cpp, LayoutScope).
+     bool mali_tile_turbo = false;
++    // turbo_compat (on by default): Tile Turbo's barriers keep a wider source scope when an image leaves a read-only
++    // layout, against brief black flashes (vk_backend.cpp, turbo_compat_). Off = exactly the narrowed barriers of the
++    // original mali_tile_turbo.
++    bool turbo_compat = true;
+     // skip_prepass (experimental, for Mali): the game's depth-only world pass is left out and the colour pass writes
+     // the depth instead (vk_backend.cpp, PrepassStat).
+     bool skip_prepass = false;
